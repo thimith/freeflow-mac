@@ -30,10 +30,34 @@ enum AppleIntelligence {
         #endif
     }
 
+    #if canImport(FoundationModels)
+    private static var preparedSystem: String?
+    private static var preparedSession: Any?
+    #endif
+
+    /// Build the session and load the model into memory while the user is still speaking.
+    static func prewarm(system: String) {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *), isAvailable {
+            let s = LanguageModelSession(instructions: system)
+            s.prewarm()
+            preparedSystem = system
+            preparedSession = s
+        }
+        #endif
+    }
+
     static func respond(system: String, user: String) async throws -> String {
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
-            let session = LanguageModelSession(instructions: system)
+            let session: LanguageModelSession
+            if preparedSystem == system, let s = preparedSession as? LanguageModelSession {
+                session = s
+            } else {
+                session = LanguageModelSession(instructions: system)
+            }
+            preparedSystem = nil
+            preparedSession = nil
             let response = try await session.respond(to: user)
             return response.content
         }
@@ -97,6 +121,35 @@ enum LLM {
 // MARK: - Polishing & command mode
 
 enum Polisher {
+    /// Called when recording starts: warm up whichever AI will be used, so it's ready the moment you stop.
+    static func prepare(mode: DictationMode, selection: String?, context: AppContext) {
+        switch Prefs.polishProvider {
+        case .appleIntelligence:
+            let system = mode == .command ? commandSystem(selection: selection, context: context) : polishPrompt(context)
+            AppleIntelligence.prewarm(system: system)
+        case .ollama:
+            // Ollama unloads idle models after 5 min; an empty generate call loads it and keeps it 30 min.
+            var root = Prefs.ollamaURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            while root.hasSuffix("/") { root.removeLast() }
+            if root.hasSuffix("/v1") { root.removeLast(3) }
+            guard let url = URL(string: root + "/api/generate") else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["model": Prefs.ollamaModel, "keep_alive": "30m"])
+            URLSession.shared.dataTask(with: req).resume()
+        default:
+            break
+        }
+    }
+
+    /// Very short utterances ("ok", "sounds good") don't need an AI round-trip.
+    static func needsAI(_ raw: String) -> Bool {
+        guard Prefs.polishProvider != .off else { return false }
+        if !Prefs.translateTo.isEmpty { return true }
+        return raw.split(whereSeparator: { $0.isWhitespace }).count > 3
+    }
+
     static func styleHint(for ctx: AppContext) -> String {
         switch ctx.category {
         case .email:
@@ -180,27 +233,33 @@ enum Polisher {
         guard Prefs.polishProvider != .off else {
             throw FFError.message("Command mode needs an AI — Settings → AI Polish")
         }
-        let system: String
+        let system = commandSystem(selection: selection, context: context)
         let user: String
         if let sel = selection, !sel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            system = """
-            You are a text-editing assistant built into the user's keyboard. The user selected some text and spoke an instruction about it.
-            Apply the instruction to the selected text and output ONLY the resulting text, which will replace the selection.
-            No preamble, no quotes, no explanations, no markdown fences unless the text is code.
-            Keep the original language unless the instruction asks for another one.
-            """ + sharedContext(context)
             user = "Instruction: \(instruction)\n\n<selected_text>\n\(sel)\n</selected_text>"
         } else {
-            system = """
-            You are a writing assistant built into the user's keyboard. The user spoke a request. Produce exactly the text that should be typed at their cursor — e.g. draft the message or email, write the reply, or answer the question concisely.
-            Output ONLY that text. No preamble, no quotes, no markdown fences unless writing code.
-            Reply in the language of the request unless told otherwise.
-            """ + sharedContext(context)
             user = instruction
         }
         let out = try await LLM.complete(system: system, user: user)
         let cleaned = TextCleanup.sanitizeLLM(out, raw: instruction)
         guard !cleaned.isEmpty else { throw FFError.message("The AI returned nothing") }
         return cleaned
+    }
+
+    static func commandSystem(selection: String?, context: AppContext) -> String {
+        if let sel = selection, !sel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return """
+            You are a text-editing assistant built into the user's keyboard. The user selected some text and spoke an instruction about it.
+            Apply the instruction to the selected text and output ONLY the resulting text, which will replace the selection.
+            No preamble, no quotes, no explanations, no markdown fences unless the text is code.
+            Keep the original language unless the instruction asks for another one.
+            """ + sharedContext(context)
+        } else {
+            return """
+            You are a writing assistant built into the user's keyboard. The user spoke a request. Produce exactly the text that should be typed at their cursor — e.g. draft the message or email, write the reply, or answer the question concisely.
+            Output ONLY that text. No preamble, no quotes, no markdown fences unless writing code.
+            Reply in the language of the request unless told otherwise.
+            """ + sharedContext(context)
+        }
     }
 }

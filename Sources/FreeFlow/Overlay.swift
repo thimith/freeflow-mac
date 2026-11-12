@@ -3,7 +3,7 @@ import SwiftUI
 
 final class OverlayModel: ObservableObject {
     enum Phase: Equatable {
-        case listening, handsFree, command, transcribing, polishing, thinking, done, message(String)
+        case listening, handsFree, command, transcribing, polishing, thinking, done(String), message(String)
         var isRecording: Bool { self == .listening || self == .handsFree || self == .command }
     }
     static let barCount = 26
@@ -74,7 +74,7 @@ final class OverlayController {
             panel.orderFrontRegardless()
         }
         switch phase {
-        case .done: scheduleHide(after: 0.9)
+        case .done: scheduleHide(after: 1.1)
         case .message: scheduleHide(after: 2.4)
         default: break
         }
@@ -149,7 +149,7 @@ struct OverlayView: View {
         case .transcribing: Text("Transcribing…")
         case .polishing: Text("Polishing…")
         case .thinking: Text("Thinking…")
-        case .done: Text("Inserted")
+        case .done(let t): Text("Inserted · \(t)")
         case .message(let m): Text(m).lineLimit(1).frame(maxWidth: 280)
         }
     }

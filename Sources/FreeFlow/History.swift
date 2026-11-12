@@ -9,6 +9,8 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     var app: String
     var mode: String
     var seconds: Double
+    var sttSeconds: Double? = nil
+    var aiSeconds: Double? = nil
     var words: Int { text.split(whereSeparator: { $0.isWhitespace }).count }
 }
 
@@ -131,6 +133,10 @@ struct HistoryRow: View {
                 if entry.mode == "command" { Image(systemName: "sparkles").foregroundStyle(.purple) }
                 Text(entry.app.isEmpty ? "Unknown app" : entry.app).font(.caption.weight(.semibold))
                 Text(entry.date.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                if let s = entry.sttSeconds {
+                    Text(timing(s, entry.aiSeconds ?? 0)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                        .help("Time after you stopped talking: speech-to-text + AI polish")
+                }
                 Spacer()
                 Button { copy(entry.text) } label: { Image(systemName: "doc.on.doc") }
                     .buttonStyle(.borderless).help("Copy")
@@ -149,6 +155,10 @@ struct HistoryRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private func timing(_ stt: Double, _ ai: Double) -> String {
+        ai > 0 ? String(format: "voice %.1fs · AI %.1fs", stt, ai) : String(format: "voice %.1fs", stt)
     }
 
     private func copy(_ s: String) {

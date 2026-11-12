@@ -224,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard state == .pushToTalk || state == .handsFree, mode == .dictation else { return }
         mode = .command
         captureSelection()
+        Polisher.prepare(mode: .command, selection: selection, context: context)
         if announced { overlay.set(.command) }
     }
 
@@ -279,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         state = newState
         if mode == .command { captureSelection() }
+        Polisher.prepare(mode: mode, selection: selection, context: context)
         // Don't flash UI/sounds for accidental taps or for the trigger used as a modifier.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, self.state == .pushToTalk || self.state == .handsFree else { return }
@@ -358,8 +360,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func process(url: URL, duration: TimeInterval, mode: DictationMode, ctx: AppContext, selection: String?) async {
         defer { try? FileManager.default.removeItem(at: url) }
+        let t0 = Date()
         do {
             let raw = TextCleanup.stripArtifacts(try await Transcriber.transcribe(url))
+            let sttTime = Date().timeIntervalSince(t0)
             try Task.checkCancellation()
             guard !raw.isEmpty else {
                 finishIdle()
@@ -367,21 +371,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return
             }
 
+            let t1 = Date()
+            var usedAI = false
             var output: String
             if mode == .command {
+                usedAI = true
                 overlay.set(.thinking)
                 output = try await Polisher.command(instruction: raw, selection: selection, context: ctx)
             } else if let snippet = Snippets.exactMatch(raw) {
                 output = snippet
-            } else {
-                if Prefs.polishProvider != .off { overlay.set(.polishing) }
+            } else if Polisher.needsAI(raw) {
+                usedAI = true
+                overlay.set(.polishing)
                 output = await Polisher.polish(raw, context: ctx)
                 output = Snippets.expandInline(output)
+            } else {
+                output = Snippets.expandInline(TextCleanup.basic(raw))
             }
             output = Vocabulary.applyReplacements(output)
             try Task.checkCancellation()
+            let aiTime = usedAI ? Date().timeIntervalSince(t1) : 0
+            NSLog("FreeFlow timing: speech %.2fs, AI %.2fs", sttTime, aiTime)
 
-            deliver(output, raw: raw, duration: duration, mode: mode, ctx: ctx)
+            deliver(output, raw: raw, duration: duration, mode: mode, ctx: ctx,
+                    sttTime: sttTime, aiTime: aiTime)
         } catch is CancellationError {
             // user pressed Esc
         } catch {
@@ -392,7 +405,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func deliver(_ text: String, raw: String, duration: TimeInterval, mode: DictationMode, ctx: AppContext) {
+    private func deliver(_ text: String, raw: String, duration: TimeInterval, mode: DictationMode, ctx: AppContext,
+                         sttTime: TimeInterval, aiTime: TimeInterval) {
         var t = text
         if Prefs.trailingSpace, mode == .dictation, ctx.category != .terminal,
            let last = t.last, !last.isWhitespace {
@@ -401,9 +415,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         TextInserter.insert(t)
         lastText = t
         HistoryStore.shared.add(HistoryEntry(date: Date(), text: text, raw: raw, app: ctx.appName,
-                                             mode: mode.rawValue, seconds: duration))
+                                             mode: mode.rawValue, seconds: duration,
+                                             sttSeconds: sttTime, aiSeconds: aiTime))
         finishIdle()
-        overlay.set(.done)
+        overlay.set(.done(String(format: "%.1fs", sttTime + aiTime)))
     }
 
     private func pasteLast() {

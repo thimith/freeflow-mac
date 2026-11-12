@@ -93,26 +93,41 @@ final class LocalWhisper: ObservableObject {
         }
         Self.killOrphans()
 
+        let base = ["-m", modelURL.path, "--host", "127.0.0.1", "--port", String(port),
+                    "-l", lang, "-t", String(Self.threads)]
+        // Speed flags: greedy decoding (beam search is ~2-3x slower for little gain on dictation),
+        // no temperature-fallback re-decodes, flash attention on Metal.
+        let fast = ["-bs", "1", "-bo", "1", "-nf", "-fa"]
+        status = "Loading \(model)…"
+        do {
+            try await start(bin: bin, args: base + fast)
+        } catch {
+            // An older/newer whisper.cpp may not know one of the flags — retry with the basics.
+            try await start(bin: bin, args: base)
+        }
+        running = (model, lang)
+        status = "Ready · \(model)"
+    }
+
+    private func start(bin: String, args: [String]) async throws {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bin)
-        p.arguments = ["-m", modelURL.path, "--host", "127.0.0.1", "--port", String(port),
-                       "-l", lang, "-t", String(Self.threads)]
+        p.arguments = args
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
-        status = "Loading \(model)…"
         try p.run()
         process = p
-        running = (model, lang)
-
         for _ in 0..<240 {   // up to 60 s for big models on first load
             if !p.isRunning {
-                process = nil; running = nil
+                process = nil
                 status = "Engine crashed — re-download the model?"
                 throw FFError.message("whisper-server exited unexpectedly")
             }
-            if await ping() { status = "Ready · \(model)"; return }
+            if await ping() { return }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
+        p.terminate()
+        process = nil
         throw FFError.message("whisper-server didn't start in time")
     }
 
@@ -180,7 +195,8 @@ final class LocalWhisper: ObservableObject {
         return try await Task.detached(priority: .userInitiated) { () throws -> String in
             let p = Process()
             p.executableURL = URL(fileURLWithPath: bin)
-            var args = ["-m", model.path, "-f", url.path, "-l", language, "-nt", "-np", "-t", String(threads)]
+            var args = ["-m", model.path, "-f", url.path, "-l", language, "-nt", "-np", "-t", String(threads),
+                        "-bs", "1", "-bo", "1"]
             if !prompt.isEmpty { args += ["--prompt", prompt] }
             p.arguments = args
             let out = Pipe()
@@ -269,6 +285,9 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
             self.progress[id] = nil
             if let e = error as NSError?, e.code != NSURLErrorCancelled { self.lastError = e.localizedDescription }
             self.objectWillChange.send()
+            if error == nil, id == Prefs.whisperModel, Prefs.transcriptionProvider == .localWhisper {
+                Task { @MainActor in try? await LocalWhisper.shared.ensureServer() }
+            }
         }
     }
 }

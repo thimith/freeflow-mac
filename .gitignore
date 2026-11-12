@@ -4,3 +4,7 @@ vendor/
 .DS_Store
 *.xcodeproj
 .swiftpm/
+windows/publish/
+windows/out/
+windows/FreeFlow/bin/
+windows/FreeFlow/obj/

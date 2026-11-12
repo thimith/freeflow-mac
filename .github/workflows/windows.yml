@@ -1,0 +1,55 @@
+name: Build FreeFlow for Windows
+
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      FF_VERSION: 1.0.${{ github.run_number }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish app (self-contained single file)
+        run: >
+          dotnet publish FreeFlow/FreeFlow.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true -p:Version=$env:FF_VERSION -o publish
+
+      - name: Bundle whisper.cpp
+        run: ./get-whisper.ps1
+
+      - name: Build installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc installer/FreeFlow.iss
+          Get-ChildItem out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FreeFlow-Setup
+          path: windows/out/FreeFlow-Setup.exe
+
+      - name: Publish release
+        run: |
+          gh release create "win-v$env:FF_VERSION" out/FreeFlow-Setup.exe `
+            --title "FreeFlow for Windows $env:FF_VERSION" `
+            --latest=false `
+            --notes "Run FreeFlow-Setup.exe. If Windows SmartScreen appears: More info, then Run anyway. Windows 10/11, 64-bit."

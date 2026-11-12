@@ -1,0 +1,38 @@
+name: Build FreeFlow.dmg
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  dmg:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use newest Xcode (macOS 26 SDK enables Apple Intelligence)
+        run: |
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC"
+          swift --version
+
+      - name: Cache whisper.cpp build
+        uses: actions/cache@v4
+        with:
+          path: vendor/bin
+          key: whisper-${{ runner.os }}-${{ hashFiles('scripts/build-whisper.sh') }}
+
+      - name: Build whisper.cpp
+        run: '[ -x vendor/bin/whisper-server ] || ./scripts/build-whisper.sh'
+
+      - name: Build app and DMG
+        run: ./make-dmg.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FreeFlow-dmg
+          path: build/FreeFlow.dmg
+          retention-days: 30

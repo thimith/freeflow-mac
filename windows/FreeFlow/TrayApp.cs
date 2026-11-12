@@ -13,6 +13,7 @@ sealed class TrayApp : ApplicationContext
     readonly Overlay overlay = new();
     readonly MediaMuter muter = new();
     readonly TranslateBar translateBar = new();
+    readonly DockBar dock = new();
     string preSelection;
     readonly System.Windows.Forms.Timer tapTimer = new() { Interval = 350 };
     readonly System.Windows.Forms.Timer announceTimer = new() { Interval = 150 };
@@ -37,6 +38,12 @@ sealed class TrayApp : ApplicationContext
         menu.Items.Add("Start / stop dictation", null, (_, _) => ToggleHandsFree());
         menu.Items.Add("Paste last transcript", null, (_, _) => PasteLast());
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Show / hide floating bubble", null, (_, _) =>
+        {
+            Settings.Current.ShowDock = !Settings.Current.ShowDock;
+            Settings.Current.Save();
+            dock.ShowDock();
+        });
         menu.Items.Add("History…", null, (_, _) => OpenHistory());
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
         menu.Items.Add(new ToolStripSeparator());
@@ -64,6 +71,14 @@ sealed class TrayApp : ApplicationContext
         hotkeys.Translate = () => translateBar.ShowMenu();
         translateBar.OnTranslate = RunTranslate;
         translateBar.OnImprove = ImproveByVoice;
+        translateBar.OnCopied = _ => Feedback.Stop();
+
+        dock.Mic = ToggleHandsFree;
+        dock.Translate = () => translateBar.ShowMenuNear(dock.Bounds);
+        dock.Recent = () => translateBar.ShowRecentNear(dock.Bounds);
+        dock.CardOpen = () => translateBar.CardOpen;
+        dock.ShowDock();
+        Settings.Changed += () => { if (Settings.Current.ShowDock != dock.Visible) dock.ShowDock(); };
 
         recorder.Level = overlay.PushLevel;
         tapTimer.Tick += (_, _) => { tapTimer.Stop(); if (state == RecState.PendingTap) CancelRecording(silently: true); };
@@ -169,6 +184,7 @@ sealed class TrayApp : ApplicationContext
             return false;
         }
         state = newState;
+        dock.SetState(DockBar.DockState.Recording);
         Llm.WarmUp();
         announceTimer.Start();   // skip sounds/UI for accidental taps or Ctrl+Win shortcuts
         maxTimer.Start();
@@ -200,6 +216,7 @@ sealed class TrayApp : ApplicationContext
     {
         state = RecState.Idle;
         announced = false;
+        dock.SetState(DockBar.DockState.Idle);
     }
 
     async void StopAndProcess()
@@ -221,6 +238,7 @@ sealed class TrayApp : ApplicationContext
         }
 
         state = RecState.Processing;
+        dock.SetState(DockBar.DockState.Busy);
         overlay.Set(Phase.Transcribing);
         var mode = commandMode;
         var ctx = context;
@@ -296,8 +314,8 @@ sealed class TrayApp : ApplicationContext
                 {
                     t2.Stop(); t2.Dispose();
                     if (state != RecState.Idle) return;
-                    overlay.HidePill();
-                    translateBar.ShowCompact();
+                    if (dock.Visible) dock.ExpandFor(5000);   // 文A + 📋 slide out of the floating bubble
+                    else { overlay.HidePill(); translateBar.ShowCompact(); }
                 };
                 t2.Start();
             }
@@ -313,6 +331,7 @@ sealed class TrayApp : ApplicationContext
         var text = Inserter.SelectionOrWholeField();
         if (string.IsNullOrWhiteSpace(text)) { overlay.Flash("Nothing to translate — click into a text box first"); return; }
         state = RecState.Processing;
+        dock.SetState(DockBar.DockState.Busy);
         overlay.ShowPhase(Phase.Translating);
         cts = new CancellationTokenSource();
         var ct = cts.Token;

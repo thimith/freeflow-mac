@@ -112,6 +112,9 @@ public sealed class Settings
     public int MicDevice { get; set; } = -1;   // -1 = Windows default
     public Combo TranslateCombo { get; set; } = Combo.CtrlAltT;
     public bool TranslateAfterDictation { get; set; } = true;
+    public bool ShowDock { get; set; } = true;
+    public int DockX { get; set; } = -1;
+    public int DockY { get; set; } = -1;
     public string[] QuickLangs { get; set; } = { "es-CO", "en-US", "fr-FR", "" };
 
     [JsonIgnore] public static bool IsFirstRun { get; private set; }

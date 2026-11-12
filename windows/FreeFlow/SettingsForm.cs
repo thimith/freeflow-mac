@@ -143,6 +143,7 @@ sealed class SettingsForm : Form
         p.Controls.Add(Check("Play start / stop sounds", s.Sounds, v => s.Sounds = v));
         p.Controls.Add(Check("Mute speakers while dictating", s.MuteMedia, v => s.MuteMedia = v));
         p.Controls.Add(Check("Show the floating recording pill", s.ShowOverlay, v => s.ShowOverlay = v));
+        p.Controls.Add(Check("Show the floating bubble (drag it anywhere · click to dictate · hover for 文A and 📋)", s.ShowDock, v => s.ShowDock = v));
         p.Controls.Add(Check("Ignore recordings with no speech", s.SilenceDetection, v => s.SilenceDetection = v));
 
         p.Controls.Add(Header("Startup"));

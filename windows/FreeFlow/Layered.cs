@@ -83,7 +83,9 @@ abstract class LayeredWindow : Form
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+            g.CompositingQuality = CompositingQuality.HighQuality;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.Clear(Color.Transparent);
             Render(g, bounds.Size);
         }
@@ -135,6 +137,70 @@ abstract class LayeredWindow : Form
     {
         using var br = new LinearGradientBrush(r, a, b, LinearGradientMode.ForwardDiagonal);
         g.FillEllipse(br, r);
+    }
+
+    // ───────── vector icons (smooth at any size, unlike emoji glyphs) ─────────
+
+    static Pen IconPen(Color c, float w) => new(c, w) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+
+    protected static void MicIcon(Graphics g, RectangleF r, Color c)
+    {
+        float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, u = r.Width;
+        using var b = new SolidBrush(c);
+        using var body = RoundRect(new RectangleF(cx - u * 0.11f, cy - u * 0.27f, u * 0.22f, u * 0.34f), u * 0.11f);
+        g.FillPath(b, body);
+        using var p = IconPen(c, Math.Max(1.6f, u * 0.055f));
+        g.DrawArc(p, cx - u * 0.19f, cy - u * 0.23f, u * 0.38f, u * 0.38f, 15, 150);
+        g.DrawLine(p, cx, cy + u * 0.15f, cx, cy + u * 0.25f);
+        g.DrawLine(p, cx - u * 0.10f, cy + u * 0.25f, cx + u * 0.10f, cy + u * 0.25f);
+    }
+
+    protected static void ClipboardIcon(Graphics g, RectangleF r, Color c)
+    {
+        float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, u = r.Width;
+        using var p = IconPen(c, Math.Max(1.5f, u * 0.055f));
+        using (var board = RoundRect(new RectangleF(cx - u * 0.19f, cy - u * 0.20f, u * 0.38f, u * 0.46f), u * 0.06f))
+            g.DrawPath(p, board);
+        using (var b = new SolidBrush(c))
+        using (var clip = RoundRect(new RectangleF(cx - u * 0.10f, cy - u * 0.27f, u * 0.20f, u * 0.11f), u * 0.035f))
+            g.FillPath(b, clip);
+        g.DrawLine(p, cx - u * 0.09f, cy - u * 0.02f, cx + u * 0.09f, cy - u * 0.02f);
+        g.DrawLine(p, cx - u * 0.09f, cy + u * 0.09f, cx + u * 0.05f, cy + u * 0.09f);
+    }
+
+    protected static void CrossIcon(Graphics g, RectangleF r, Color c, float scale = 0.22f)
+    {
+        float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, s = r.Width * scale;
+        using var p = IconPen(c, Math.Max(1.6f, r.Width * 0.06f));
+        g.DrawLine(p, cx - s, cy - s, cx + s, cy + s);
+        g.DrawLine(p, cx - s, cy + s, cx + s, cy - s);
+    }
+
+    protected static void GlobeIcon(Graphics g, RectangleF r, Color c)
+    {
+        float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, rad = r.Width / 2 * 0.86f;
+        using var p = IconPen(c, Math.Max(1.3f, r.Width * 0.07f));
+        g.DrawEllipse(p, cx - rad, cy - rad, rad * 2, rad * 2);
+        g.DrawEllipse(p, cx - rad * 0.45f, cy - rad, rad * 0.9f, rad * 2);
+        g.DrawLine(p, cx - rad, cy, cx + rad, cy);
+    }
+
+    protected static void SparkleIcon(Graphics g, RectangleF r, Color c)
+    {
+        using var b = new SolidBrush(c);
+        void Star(float x, float y, float s)
+        {
+            using var p = new GraphicsPath();
+            p.AddBezier(x, y - s, x, y, x, y, x + s, y);
+            p.AddBezier(x + s, y, x, y, x, y, x, y + s);
+            p.AddBezier(x, y + s, x, y, x, y, x - s, y);
+            p.AddBezier(x - s, y, x, y, x, y, x, y - s);
+            p.CloseFigure();
+            g.FillPath(b, p);
+        }
+        float u = r.Width;
+        Star(r.X + u * 0.42f, r.Y + u * 0.56f, u * 0.36f);
+        Star(r.X + u * 0.80f, r.Y + u * 0.22f, u * 0.18f);
     }
 
     protected static void Text(Graphics g, string t, RectangleF r, Font f, Color c, StringAlignment h = StringAlignment.Center, bool wrap = false)

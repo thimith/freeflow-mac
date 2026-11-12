@@ -35,7 +35,7 @@ sealed class TranslateBar : LayeredWindow
     readonly System.Windows.Forms.Timer copiedTimer = new() { Interval = 900 };
 
     static readonly Color CardBg = Color.FromArgb(250, 26, 26, 34);
-    static readonly Color Rim = Color.FromArgb(70, 255, 255, 255);
+    static readonly Color Rim = Color.FromArgb(150, 255, 255, 255);
     static readonly Color Tile = Color.FromArgb(46, 46, 58);
     static readonly Color TileHot = Color.FromArgb(70, 70, 88);
     static readonly Color Pink1 = Color.FromArgb(170, 110, 255), Pink2 = Color.FromArgb(236, 72, 153);
@@ -237,7 +237,7 @@ sealed class TranslateBar : LayeredWindow
         {
             using var b = new SolidBrush(CardBg);
             g.FillPath(b, path);
-            using var pen = new Pen(Rim, Math.Max(1f, 1.2f * S));
+            using var pen = new Pen(Rim, Math.Max(1.6f, 2f * S));
             g.DrawPath(pen, path);
         }
         using (var f = new Font("Segoe UI Semibold", 8.75f))
@@ -267,8 +267,7 @@ sealed class TranslateBar : LayeredWindow
         var r = Shown(it);
         if (it.Close)
         {
-            using var f = new Font("Segoe UI", 10f, FontStyle.Bold);
-            Text(g, "✕", r, f, hot == index ? Color.White : Color.FromArgb(150, 255, 255, 255));
+            CrossIcon(g, r, hot == index ? Color.White : Color.FromArgb(160, 255, 255, 255), 0.18f);
             return;
         }
         using (var path = RoundRect(r, D(10)))
@@ -318,8 +317,16 @@ sealed class TranslateBar : LayeredWindow
         }
         else
         {
-            using var f = new Font(it.Title.StartsWith("🌐") || it.Title.StartsWith("✨") ? "Segoe UI Emoji" : "Segoe UI Semibold", 9.75f);
-            Text(g, it.Title, new RectangleF(tx, r.Y, r.Right - tx - D(6), r.Height), f, Color.White, StringAlignment.Near);
+            string title = it.Title;
+            if (title.StartsWith("🌐") || title.StartsWith("✨"))
+            {
+                var icon = new RectangleF(tx, r.Y + (r.Height - D(18)) / 2, D(18), D(18));
+                if (title.StartsWith("🌐")) GlobeIcon(g, icon, Color.White); else SparkleIcon(g, icon, Color.White);
+                title = title.Substring(2).TrimStart();
+                tx += D(26);
+            }
+            using var f = new Font("Segoe UI Semibold", 9.75f);
+            Text(g, title, new RectangleF(tx, r.Y, r.Right - tx - D(6), r.Height), f, Color.White, StringAlignment.Near);
         }
     }
 

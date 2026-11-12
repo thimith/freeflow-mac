@@ -27,41 +27,48 @@ static class CaretContext
                 var sel = text.GetSelection();
                 if (sel.Length == 0) return null;
                 var caret = sel[0];
+                string placeholder = "", help = "";
+                try { placeholder = el.Current.Name ?? ""; help = el.Current.HelpText ?? ""; } catch { }
                 var before = caret.Clone();
                 before.MoveEndpointByRange(TextPatternRangeEndpoint.End, caret, TextPatternRangeEndpoint.Start);
                 before.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -60);
                 var after = caret.Clone();
                 after.MoveEndpointByRange(TextPatternRangeEndpoint.Start, caret, TextPatternRangeEndpoint.End);
                 after.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, 20);
-                return new Around(before.GetText(60) ?? "", after.GetText(20) ?? "");
+                var b = before.GetText(60) ?? "";
+                var a = after.GetText(20) ?? "";
+                // an empty box that reports its grey placeholder ("Message #general") is not text you wrote
+                string whole = (b + a).Trim();
+                if (whole.Length > 0 && (whole == placeholder.Trim() || whole == help.Trim())) return new Around("", "");
+                return new Around(b, a);
             }
-            if (el.TryGetCurrentPattern(ValuePattern.Pattern, out var vp) && vp is ValuePattern value)
-            {
-                // no caret info: assume we're typing at the end of the field
-                var v = value.Current.Value ?? "";
-                return new Around(v.Length > 60 ? v[^60..] : v, "");
-            }
+            // apps that don't expose the cursor: we can't know → treat as a new sentence (capitalized)
         }
         catch { }
         return null;
     }
 
-    /// True when the cursor sits inside a sentence (not at the start of the field or after . ! ? or a new line).
+    /// True only when we're sure the cursor sits inside a sentence: same line, right after a word or a comma.
+    /// Start of the box, a new line, or after . ! ? : → a new sentence (capitalized).
     public static bool MidSentence(Around a)
     {
         if (a == null) return false;
-        var b = a.Before.TrimEnd(' ', '\t');
+        var b = a.Before.Replace("\r", "\n");
+        int nl = b.LastIndexOf('\n');
+        if (nl >= 0) b = b[(nl + 1)..];
+        b = b.TrimEnd(' ', '\t', '\u00A0');
         if (b.Length == 0) return false;
         char last = b[^1];
-        return !(".!?¡¿\n\r…:".Contains(last));
+        return char.IsLetterOrDigit(last) || ",;-–—(\"'“‘".Contains(last);
     }
 
     /// Adjust dictated text so it continues the sentence around the cursor.
     public static string Fit(string text, Around a)
     {
-        if (a == null || string.IsNullOrEmpty(text)) return text;
+        if (string.IsNullOrEmpty(text)) return text;
+        if (a == null) return UpperFirst(text);
         var t = text;
-        if (MidSentence(a))
+        if (!MidSentence(a)) return UpperFirst(t);   // new sentence → always a capital
         {
             t = LowerFirst(t);
             // leading space when we're right after a word
@@ -72,6 +79,14 @@ static class CaretContext
         if (after.Length > 0 && char.IsLetterOrDigit(after[0]) && t.EndsWith('.') && !t.EndsWith("..."))
             t = t[..^1];
         return t;
+    }
+
+    static string UpperFirst(string t)
+    {
+        int i = 0;
+        while (i < t.Length && !char.IsLetter(t[i])) i++;
+        if (i >= t.Length || char.IsUpper(t[i])) return t;
+        return t[..i] + char.ToUpper(t[i]) + t[(i + 1)..];
     }
 
     static string LowerFirst(string t)

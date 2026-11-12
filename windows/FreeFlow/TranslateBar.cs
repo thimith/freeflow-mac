@@ -1,43 +1,49 @@
-using System.Drawing.Drawing2D;
-
 namespace FreeFlow;
 
-/// "文A Translate" button shown for 5 s after each dictation, and the language card it opens.
-/// Clickable but never takes focus away from the app you're typing in.
-sealed class TranslateBar : Form
+/// The cards that open from the bubble: translate languages, all languages, and your last 5 dictations.
+/// Custom-drawn with smooth edges; clicking never steals focus from the app you're typing in.
+sealed class TranslateBar : LayeredWindow
 {
     public Action<TLang> OnTranslate;
     public Action OnImprove;
     public Action<string> OnCopied;
 
-    enum Mode { Compact, Menu, All, Recent }
+    enum Mode { Menu, All, Recent }
     Mode mode;
-    Rectangle? anchor;   // the floating bubble, when the card opens from it
+    Rectangle? anchor;
+    int hot = -1, scroll, copiedIndex = -1;
+
+    sealed class Item
+    {
+        public RectangleF R;
+        public string Title, Sub, Badge;
+        public Color Bg;
+        public bool Accent, Close;
+        public Action Act;
+        public bool Scrolls;
+    }
+    readonly List<Item> items = new();
+    string caption = "";
+    float listTop, listBottom, contentHeight;
+    int totalHeight;
+
     readonly System.Windows.Forms.Timer hideTimer = new();
     readonly System.Windows.Forms.Timer outsideTimer = new() { Interval = 120 };
-    readonly FlowLayoutPanel body = new() { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent };
+    readonly System.Windows.Forms.Timer copiedTimer = new() { Interval = 900 };
 
-    static readonly Color CardBg = Color.FromArgb(28, 28, 36);
-    static readonly Color TileBg = Color.FromArgb(48, 48, 60);
-    static readonly Color Purple = Color.FromArgb(124, 77, 255);
-    static readonly Color Blue = Color.FromArgb(40, 110, 255);
-    static readonly Color Pink = Color.FromArgb(236, 72, 153);
+    static readonly Color CardBg = Color.FromArgb(250, 26, 26, 34);
+    static readonly Color Rim = Color.FromArgb(70, 255, 255, 255);
+    static readonly Color Tile = Color.FromArgb(46, 46, 58);
+    static readonly Color TileHot = Color.FromArgb(70, 70, 88);
+    static readonly Color Pink1 = Color.FromArgb(170, 110, 255), Pink2 = Color.FromArgb(236, 72, 153);
 
     public TranslateBar()
     {
-        FormBorderStyle = FormBorderStyle.None;
-        ShowInTaskbar = false;
-        TopMost = true;
-        StartPosition = FormStartPosition.Manual;
-        BackColor = CardBg;
-        DoubleBuffered = true;
-        Font = new Font("Segoe UI", 10f);
-        Controls.Add(body);
         hideTimer.Tick += (_, _) => HideBar();
-        // close cards when you click somewhere else (but not on the bubble)
+        copiedTimer.Tick += (_, _) => { copiedTimer.Stop(); copiedIndex = -1; Redraw(); };
         outsideTimer.Tick += (_, _) =>
         {
-            if (!Visible || mode == Mode.Compact) return;
+            if (!Visible) return;
             if ((Control.MouseButtons & (MouseButtons.Left | MouseButtons.Right)) == 0) return;
             var c = Cursor.Position;
             if (Bounds.Contains(c) || (anchor is { } a && Rectangle.Inflate(a, D(8), D(8)).Contains(c))) return;
@@ -45,147 +51,11 @@ sealed class TranslateBar : Form
         };
     }
 
-    public bool CardOpen => Visible && mode != Mode.Compact;
+    public bool CardOpen => Visible;
 
-    protected override bool ShowWithoutActivation => true;
-
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            var cp = base.CreateParams;
-            cp.ExStyle |= 0x80 /*TOOLWINDOW*/ | 0x08000000 /*NOACTIVATE*/ | 0x8 /*TOPMOST*/;
-            return cp;
-        }
-    }
-
-    protected override void WndProc(ref Message m)
-    {
-        const int WM_MOUSEACTIVATE = 0x21, MA_NOACTIVATE = 3;
-        if (m.Msg == WM_MOUSEACTIVATE) { m.Result = (IntPtr)MA_NOACTIVATE; return; }
-        base.WndProc(ref m);
-    }
-
-    float S => DeviceDpi / 96f;
-    int D(float v) => (int)(v * S);
-
-    public void ShowCompact()
-    {
-        mode = Mode.Compact;
-        anchor = null;
-        body.Controls.Clear();
-        body.FlowDirection = FlowDirection.LeftToRight;
-        var pill = new Label
-        {
-            Text = "文A  Translate", ForeColor = Color.White, BackColor = Color.Transparent,
-            Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter,
-            Size = new Size(D(140), D(40)), Margin = Padding.Empty, Cursor = Cursors.Hand,
-        };
-        pill.Click += (_, _) => ShowMenu();
-        var copy = new Label
-        {
-            Text = "📋", ForeColor = Color.White, BackColor = Color.Transparent,
-            Font = new Font("Segoe UI Emoji", 12f), TextAlign = ContentAlignment.MiddleCenter,
-            Size = new Size(D(46), D(40)), Margin = Padding.Empty, Cursor = Cursors.Hand,
-        };
-        copy.Click += (_, _) => ShowRecent();
-        body.Controls.Add(pill);
-        body.Controls.Add(copy);
-        body.Padding = Padding.Empty;
-        Place(new Size(D(186), D(40)), pill: true);
-        StartHide(5000);
-    }
-
-    public void ShowMenuNear(Rectangle bubble) { anchor = bubble; ShowMenu(keepAnchor: true); }
-    public void ShowRecentNear(Rectangle bubble) { anchor = bubble; ShowRecent(keepAnchor: true); }
-
-    /// Your last 5 dictations — click one to copy it. Stays open until you close it.
-    public void ShowRecent(bool keepAnchor = false)
-    {
-        if (!keepAnchor) anchor = null;
-        mode = Mode.Recent;
-        hideTimer.Stop();
-        body.Controls.Clear();
-        body.FlowDirection = FlowDirection.TopDown;
-        body.Padding = new Padding(D(10));
-        var head = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = Padding.Empty, BackColor = Color.Transparent };
-        var cap = Caption("Recent dictations — click to copy");
-        cap.Width = D(240); cap.AutoSize = false; cap.Height = D(22);
-        head.Controls.Add(cap);
-        var close = new Label { Text = "✕", ForeColor = Color.FromArgb(170, 255, 255, 255), Font = new Font("Segoe UI", 10f, FontStyle.Bold),
-                                Size = new Size(D(26), D(22)), TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand, BackColor = Color.Transparent };
-        close.Click += (_, _) => HideBar();
-        head.Controls.Add(close);
-        body.Controls.Add(head);
-        var items = HistoryStore.Shared.Entries.Take(5).ToList();
-        if (items.Count == 0) body.Controls.Add(Caption("Nothing dictated yet."));
-        foreach (var e in items)
-        {
-            var text = e.Text;
-            var preview = text.Replace("\r", " ").Replace("\n", " ⏎ ");
-            Label tile = null;
-            tile = Tile(preview, D(268), TileBg, () =>
-            {
-                Inserter.SetClipboard(text, false);
-                OnCopied?.Invoke(text);
-                tile.Text = "✓  Copied";
-                var t = new System.Windows.Forms.Timer { Interval = 900 };
-                t.Tick += (_, _) => { t.Stop(); t.Dispose(); if (!tile.IsDisposed) tile.Text = preview; };
-                t.Start();
-            });
-            tile.Height = D(52);
-            tile.Font = new Font("Segoe UI", 9.5f);
-            tile.TextAlign = ContentAlignment.MiddleLeft;
-            body.Controls.Add(tile);
-        }
-        body.PerformLayout();
-        Place(new Size(D(292), body.PreferredSize.Height), pill: false);
-        outsideTimer.Start();
-    }
-
-    public void ShowMenu() => ShowMenu(false);
-
-    void ShowMenu(bool keepAnchor)
-    {
-        if (!keepAnchor) anchor = null;
-        mode = Mode.Menu;
-        body.FlowDirection = FlowDirection.TopDown;
-        body.Controls.Clear();
-        body.Padding = new Padding(D(10));
-        body.Controls.Add(Caption("Translate to"));
-        var grid = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, WrapContents = true, Width = D(272), AutoSize = true, Margin = Padding.Empty };
-        foreach (var l in TLang.Quick())
-            grid.Controls.Add(Tile($"{l.Flag}  {l.Short}", D(132), TileBg, () => Pick(l)));
-        body.Controls.Add(grid);
-        body.Controls.Add(Tile("🌐  More languages", D(268), TileBg, ShowAll));
-        body.Controls.Add(Tile("✨  Improve by voice", D(268), Pink, () => { HideBar(); OnImprove?.Invoke(); }));
-        body.PerformLayout();
-        Place(new Size(D(292), body.PreferredSize.Height), pill: false);
-        StartHide(20000);
-        outsideTimer.Start();
-    }
-
-    void ShowAll()
-    {
-        mode = Mode.All;
-        body.FlowDirection = FlowDirection.TopDown;
-        body.Controls.Clear();
-        body.Padding = new Padding(D(10));
-        body.Controls.Add(Caption("All languages"));
-        var list = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true,
-            Width = D(280), Height = D(360), Margin = Padding.Empty,
-        };
-        foreach (var l in TLang.All) list.Controls.Add(Tile($"{l.Flag}  {l.Label}", D(250), TileBg, () => Pick(l)));
-        body.Controls.Add(list);
-        body.PerformLayout();
-        Place(new Size(D(300), body.PreferredSize.Height), pill: false);
-        StartHide(30000);
-        outsideTimer.Start();
-    }
-
-    void Pick(TLang l) { HideBar(); OnTranslate?.Invoke(l); }
+    public void ShowMenu() { anchor = null; Open(Mode.Menu); }
+    public void ShowMenuNear(Rectangle bubble) { anchor = bubble; Open(Mode.Menu); }
+    public void ShowRecentNear(Rectangle bubble) { anchor = bubble; Open(Mode.Recent); }
 
     public void HideBar()
     {
@@ -194,80 +64,276 @@ sealed class TranslateBar : Form
         Hide();
     }
 
-    void StartHide(int ms)
+    void Open(Mode m)
     {
+        mode = m;
+        scroll = 0;
+        hot = -1;
+        copiedIndex = -1;
+        Redraw();
+        if (!Visible) Show();
         hideTimer.Stop();
-        hideTimer.Interval = ms;
-        hideTimer.Start();
+        if (m == Mode.Menu) { hideTimer.Interval = 20000; hideTimer.Start(); }
+        if (m == Mode.All) { hideTimer.Interval = 45000; hideTimer.Start(); }
+        // Recent stays open until you close it
+        outsideTimer.Start();
     }
 
-    void Place(Size size, bool pill)
+    // ───────── layout ─────────
+
+    int W => D(296);
+    int P => D(12);
+    int TileH => D(40);
+
+    static string Code(TLang l)
     {
-        if (anchor is { } a && !pill)
+        var i = l.Id.IndexOf('-');
+        var c = i > 0 ? l.Id[(i + 1)..] : l.Id;
+        return c == "419" ? "LA" : c.ToUpperInvariant();
+    }
+
+    static string Region(TLang l)
+    {
+        int i = l.Label.IndexOf(" (");
+        return i > 0 ? l.Label[(i + 2)..^1] : null;
+    }
+
+    void Build()
+    {
+        items.Clear();
+        float y = P + D(26);
+        float inner = W - 2 * P;
+        switch (mode)
         {
-            // just above the floating bubble (below it if it's near the top), right edges aligned
-            var wa2 = Screen.FromRectangle(a).WorkingArea;
-            int x = Math.Clamp(a.Right - size.Width, wa2.Left, wa2.Right - size.Width);
-            int y = a.Top - size.Height - D(10);
-            if (y < wa2.Top) y = Math.Min(a.Bottom + D(10), wa2.Bottom - size.Height);
-            Bounds = new Rectangle(x, y, size.Width, size.Height);
+            case Mode.Menu:
+            {
+                caption = "Translate to";
+                var quick = TLang.Quick();
+                float half = (inner - D(8)) / 2;
+                for (int i = 0; i < quick.Count; i++)
+                {
+                    var l = quick[i];
+                    float x = P + (i % 2) * (half + D(8));
+                    if (i > 0 && i % 2 == 0) y += TileH + D(8);
+                    items.Add(new Item { R = new RectangleF(x, y, half, TileH), Title = l.Short, Sub = Region(l), Badge = Code(l), Bg = Tile, Act = () => Pick(l) });
+                }
+                if (quick.Count > 0) y += TileH + D(8);
+                items.Add(new Item { R = new RectangleF(P, y, inner, TileH), Title = "🌐  More languages", Bg = Tile, Act = () => Open(Mode.All) });
+                y += TileH + D(8);
+                items.Add(new Item { R = new RectangleF(P, y, inner, TileH), Title = "✨  Improve by voice", Accent = true, Act = () => { HideBar(); OnImprove?.Invoke(); } });
+                y += TileH;
+                break;
+            }
+            case Mode.All:
+            {
+                caption = "All languages";
+                listTop = y;
+                foreach (var l in TLang.All)
+                {
+                    var ll = l;
+                    items.Add(new Item { R = new RectangleF(P, y, inner, TileH), Title = l.Short, Sub = Region(l), Badge = Code(l), Bg = Tile, Scrolls = true, Act = () => Pick(ll) });
+                    y += TileH + D(6);
+                }
+                contentHeight = y - listTop;
+                y = listTop + Math.Min(contentHeight, D(380));
+                listBottom = y;
+                break;
+            }
+            case Mode.Recent:
+            {
+                caption = "Recent dictations — click to copy";
+                items.Add(new Item { R = new RectangleF(W - P - D(26), P - D(2), D(26), D(26)), Title = "✕", Close = true, Act = HideBar });
+                var list = HistoryStore.Shared.Entries.Take(5).ToList();
+                if (list.Count == 0)
+                {
+                    items.Add(new Item { R = new RectangleF(P, y, inner, TileH), Title = "Nothing dictated yet", Bg = Tile });
+                    y += TileH;
+                }
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var text = list[i].Text;
+                    int idx = items.Count;
+                    var age = DateTime.Now - list[i].Date;
+                    string when = age.TotalMinutes < 1 ? "just now" : age.TotalHours < 1 ? $"{(int)age.TotalMinutes} min ago"
+                                : age.TotalDays < 1 ? $"{(int)age.TotalHours} h ago" : list[i].Date.ToString("d MMM");
+                    items.Add(new Item
+                    {
+                        R = new RectangleF(P, y, inner, D(58)), Title = text.Replace("\r", " ").Replace("\n", " ⏎ "),
+                        Sub = (string.IsNullOrEmpty(list[i].App) ? "" : list[i].App + " · ") + when, Bg = Tile,
+                        Act = () =>
+                        {
+                            Inserter.SetClipboard(text, false);
+                            OnCopied?.Invoke(text);
+                            copiedIndex = idx;
+                            copiedTimer.Stop(); copiedTimer.Start();
+                            Redraw();
+                        },
+                    });
+                    y += D(58) + D(6);
+                }
+                break;
+            }
+        }
+        totalHeight = (int)Math.Ceiling(y + P);
+    }
+
+    Rectangle TargetBounds()
+    {
+        Build();
+        var size = new Size(W, totalHeight);
+        Rectangle wa;
+        int x, y;
+        if (anchor is { } a)
+        {
+            wa = Screen.FromRectangle(a).WorkingArea;
+            x = Math.Clamp(a.Right - size.Width, wa.Left, wa.Right - size.Width);
+            y = a.Top - size.Height - D(10);
+            if (y < wa.Top) y = Math.Min(a.Bottom + D(10), wa.Bottom - size.Height);
         }
         else
         {
-            var wa = Screen.FromPoint(Cursor.Position).WorkingArea;
-            Bounds = new Rectangle(wa.Left + (wa.Width - size.Width) / 2, wa.Bottom - size.Height - D(28), size.Width, size.Height);
+            wa = Screen.FromPoint(Cursor.Position).WorkingArea;
+            x = wa.Left + (wa.Width - size.Width) / 2;
+            y = wa.Bottom - size.Height - D(96);
         }
-        BackColor = pill ? Purple : CardBg;
-        using var path = Rounded(new Rectangle(0, 0, size.Width, size.Height), pill ? size.Height / 2 : D(16));
-        Region = new Region(path);
-        if (!Visible) Show();
-        TopMost = true;
-        Invalidate();
+        return new Rectangle(x, y, size.Width, size.Height);
     }
 
-    protected override void OnPaintBackground(PaintEventArgs e)
+    void Redraw() => Present(TargetBounds());
+
+    // ───────── drawing ─────────
+
+    protected override void Render(Graphics g, Size size)
     {
-        if (mode == Mode.Compact)
+        var card = new RectangleF(D(1), D(1), size.Width - D(2) - 1, size.Height - D(2) - 1);
+        using (var path = RoundRect(card, D(16)))
         {
-            using var b = new LinearGradientBrush(ClientRectangle, Purple, Blue, LinearGradientMode.Horizontal);
-            e.Graphics.FillRectangle(b, ClientRectangle);
+            using var b = new SolidBrush(CardBg);
+            g.FillPath(b, path);
+            using var pen = new Pen(Rim, Math.Max(1f, 1.2f * S));
+            g.DrawPath(pen, path);
         }
-        else base.OnPaintBackground(e);
-    }
+        using (var f = new Font("Segoe UI Semibold", 8.75f))
+            Text(g, caption, new RectangleF(P + D(2), P - D(2), W - 2 * P - D(30), D(22)), f, Color.FromArgb(160, 255, 255, 255), StringAlignment.Near);
 
-    Label Caption(string t) => new()
-    {
-        Text = t, ForeColor = Color.FromArgb(150, 255, 255, 255), AutoSize = true,
-        Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), Margin = new Padding(D(2), 0, 0, D(6)), BackColor = Color.Transparent,
-    };
+        var state = g.Save();
+        if (mode == Mode.All) g.SetClip(new RectangleF(0, listTop - D(2), size.Width, listBottom - listTop + D(4)));
+        for (int i = 0; i < items.Count; i++) DrawItem(g, items[i], i);
+        g.Restore(state);
 
-    Label Tile(string text, int width, Color bg, Action onClick)
-    {
-        var t = new Label
+        if (mode == Mode.All && contentHeight > listBottom - listTop)
         {
-            Text = text, ForeColor = Color.White, BackColor = bg, AutoSize = false,
-            Size = new Size(width, D(38)), TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(D(10), 0, 0, 0), Margin = new Padding(0, 0, D(4), D(4)),
-            Font = new Font("Segoe UI Emoji", 10f), Cursor = Cursors.Hand, AutoEllipsis = true,
-        };
-        void Round() { using var p = Rounded(new Rectangle(0, 0, t.Width, t.Height), D(10)); t.Region = new Region(p); }
-        Round();
-        t.Resize += (_, _) => Round();
-        t.MouseEnter += (_, _) => t.BackColor = ControlPaint.Light(bg, 0.25f);
-        t.MouseLeave += (_, _) => t.BackColor = bg;
-        t.Click += (_, _) => onClick();
-        return t;
+            float track = listBottom - listTop;
+            float thumbH = Math.Max(D(24), track * track / contentHeight);
+            float maxScroll = contentHeight - track;
+            float thumbY = listTop + (track - thumbH) * (maxScroll <= 0 ? 0 : scroll / maxScroll);
+            using var tb = new SolidBrush(Color.FromArgb(90, 255, 255, 255));
+            using var tp = RoundRect(new RectangleF(size.Width - D(7), thumbY, D(3), thumbH), D(1.5f));
+            g.FillPath(tb, tp);
+        }
     }
 
-    static GraphicsPath Rounded(Rectangle r, int radius)
+    RectangleF Shown(Item it) => it.Scrolls ? new RectangleF(it.R.X, it.R.Y - scroll, it.R.Width, it.R.Height) : it.R;
+
+    void DrawItem(Graphics g, Item it, int index)
     {
-        var p = new GraphicsPath();
-        int d = Math.Max(1, radius * 2);
-        p.AddArc(r.X, r.Y, d, d, 180, 90);
-        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-        p.CloseFigure();
-        return p;
+        var r = Shown(it);
+        if (it.Close)
+        {
+            using var f = new Font("Segoe UI", 10f, FontStyle.Bold);
+            Text(g, "✕", r, f, hot == index ? Color.White : Color.FromArgb(150, 255, 255, 255));
+            return;
+        }
+        using (var path = RoundRect(r, D(10)))
+        {
+            if (it.Accent)
+            {
+                using var gb = new System.Drawing.Drawing2D.LinearGradientBrush(r, Pink1, Pink2, System.Drawing.Drawing2D.LinearGradientMode.Horizontal);
+                g.FillPath(gb, path);
+                if (hot == index) { using var hl = new SolidBrush(Color.FromArgb(40, 255, 255, 255)); g.FillPath(hl, path); }
+            }
+            else
+            {
+                using var b = new SolidBrush(hot == index && it.Act != null ? TileHot : it.Bg);
+                g.FillPath(b, path);
+            }
+        }
+
+        float tx = r.X + D(12);
+        if (it.Badge != null)
+        {
+            var br = new RectangleF(r.X + D(8), r.Y + (r.Height - D(26)) / 2, D(26), D(26));
+            using (var bb = new SolidBrush(Color.FromArgb(124, 77, 255))) g.FillEllipse(bb, br);
+            using (var bf = new Font("Segoe UI", it.Badge.Length > 2 ? 6.5f : 7.5f, FontStyle.Bold)) Text(g, it.Badge, br, bf, Color.White);
+            tx = br.Right + D(8);
+        }
+
+        if (copiedIndex == index)
+        {
+            using var f = new Font("Segoe UI Semibold", 10f);
+            Text(g, "✓  Copied", new RectangleF(tx, r.Y, r.Right - tx - D(8), r.Height), f, Color.FromArgb(120, 230, 150), StringAlignment.Near);
+            return;
+        }
+
+        if (mode == Mode.Recent && it.Sub != null)
+        {
+            using var f = new Font("Segoe UI", 9.5f);
+            using var sf = new Font("Segoe UI", 8f);
+            Text(g, it.Title, new RectangleF(tx, r.Y + D(5), r.Right - tx - D(10), D(32)), f, Color.White, StringAlignment.Near, wrap: true);
+            Text(g, it.Sub, new RectangleF(tx, r.Bottom - D(20), r.Right - tx - D(10), D(16)), sf, Color.FromArgb(140, 255, 255, 255), StringAlignment.Near);
+        }
+        else if (it.Sub != null)
+        {
+            using var f = new Font("Segoe UI Semibold", 9.75f);
+            using var sf = new Font("Segoe UI", 7.75f);
+            Text(g, it.Title, new RectangleF(tx, r.Y + D(3), r.Right - tx - D(6), D(20)), f, Color.White, StringAlignment.Near);
+            Text(g, it.Sub, new RectangleF(tx, r.Y + D(20), r.Right - tx - D(6), D(16)), sf, Color.FromArgb(150, 255, 255, 255), StringAlignment.Near);
+        }
+        else
+        {
+            using var f = new Font(it.Title.StartsWith("🌐") || it.Title.StartsWith("✨") ? "Segoe UI Emoji" : "Segoe UI Semibold", 9.75f);
+            Text(g, it.Title, new RectangleF(tx, r.Y, r.Right - tx - D(6), r.Height), f, Color.White, StringAlignment.Near);
+        }
     }
+
+    // ───────── input ─────────
+
+    int HitTest(Point p)
+    {
+        for (int i = items.Count - 1; i >= 0; i--)
+        {
+            var it = items[i];
+            if (it.Act == null) continue;
+            if (it.Scrolls && (p.Y < listTop || p.Y > listBottom)) continue;
+            if (Shown(it).Contains(p)) return i;
+        }
+        return -1;
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        int h = HitTest(e.Location);
+        if (h != hot) { hot = h; Redraw(); }
+    }
+
+    protected override void OnMouseLeave(EventArgs e) { if (hot != -1) { hot = -1; Redraw(); } }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        int h = HitTest(e.Location);
+        if (h >= 0) items[h].Act?.Invoke();
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        if (mode != Mode.All) return;
+        float max = Math.Max(0, contentHeight - (listBottom - listTop));
+        scroll = (int)Math.Clamp(scroll - e.Delta / 120f * D(46), 0, max);
+        hot = HitTest(PointToClient(Cursor.Position));
+        Redraw();
+        hideTimer.Stop(); hideTimer.Start();
+    }
+
+    void Pick(TLang l) { HideBar(); OnTranslate?.Invoke(l); }
 }

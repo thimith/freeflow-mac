@@ -73,7 +73,9 @@ sealed class TrayApp : ApplicationContext
         translateBar.OnImprove = ImproveByVoice;
         translateBar.OnCopied = _ => Feedback.Stop();
 
+        overlay.Dock = dock;
         dock.Mic = ToggleHandsFree;
+        dock.Cancel = Cancel;
         dock.Translate = () => translateBar.ShowMenuNear(dock.Bounds);
         dock.Recent = () => translateBar.ShowRecentNear(dock.Bounds);
         dock.CardOpen = () => translateBar.CardOpen;
@@ -307,18 +309,6 @@ sealed class TrayApp : ApplicationContext
         if (ok)
         {
             overlay.Set(Phase.Done, $"{stt + ai:0.0}s");
-            if (!command && Settings.Current.TranslateAfterDictation)
-            {
-                var t2 = new System.Windows.Forms.Timer { Interval = 1000 };
-                t2.Tick += (_, _) =>
-                {
-                    t2.Stop(); t2.Dispose();
-                    if (state != RecState.Idle) return;
-                    if (dock.Visible) dock.ExpandFor(5000);   // 文A + 📋 slide out of the floating bubble
-                    else { overlay.HidePill(); translateBar.ShowCompact(); }
-                };
-                t2.Start();
-            }
         }
         else { Feedback.Error(); overlay.Flash(why); }
     }
@@ -343,7 +333,7 @@ sealed class TrayApp : ApplicationContext
             FinishIdle();
             var (ok, why) = Inserter.Insert(outp);
             lastText = outp;
-            if (ok) overlay.Set(Phase.Done, $"{lang.Flag} {(DateTime.Now - t0).TotalSeconds:0.0}s");
+            if (ok) overlay.Set(Phase.Done, $"{lang.Short} · {(DateTime.Now - t0).TotalSeconds:0.0}s");
             else overlay.Flash(why);
         }
         catch (OperationCanceledException) { }

@@ -1,121 +1,292 @@
-using System.Drawing.Drawing2D;
-
 namespace FreeFlow;
 
-/// The always-on floating bubble: a small mic you can drag anywhere. Hover (or finish a dictation)
-/// and 文A + 📋 slide out above it. Never takes focus from the app you're typing in.
-sealed class DockBar : Form
+/// The floating bubble — and the one place that shows what FreeFlow is doing.
+/// Idle: 🎙 · 文A · 📋.  Recording: ■ · waveform + timer · ✕.  Working: spinner · "Transcribing…".
+/// Done: 🎙 · "Inserted · 1.2s" · 文A · 📋.  Drag it anywhere; it never takes focus.
+sealed class DockBar : LayeredWindow
 {
     public enum DockState { Idle, Recording, Busy }
 
-    public Action Mic, Translate, Recent;
-    /// True while a card (languages / recent dictations) is open next to the bubble — keeps it expanded.
+    public Action Mic, Translate, Recent, Cancel;
     public Func<bool> CardOpen = () => false;
 
-    DockState state = DockState.Idle;
+    Phase phase = Phase.Done;
+    bool idle = true;
+    string text = "";
+    readonly float[] levels = new float[24];
+    DateTime start = DateTime.Now;
+    int spin, hot = -1;
     bool dragging, pressed;
-    Point downScreen, downLocation;
-    int hot = -1;   // hovered button index
+    Point downScreen, downOrigin;
+    bool transient;   // shown only for this activity (bubble turned off in settings)
 
-    const int Size1 = 48, Gap = 6;
+    readonly System.Windows.Forms.Timer anim = new() { Interval = 33 };
+    readonly System.Windows.Forms.Timer back = new();
+
+    readonly List<(RectangleF r, int id)> hits = new();
+    const int HitMic = 0, HitTranslate = 1, HitRecent = 2, HitCancel = 3;
+
+    static readonly Color Bg = Color.FromArgb(246, 20, 20, 26);
+    static readonly Color Rim = Color.FromArgb(120, 255, 255, 255);
     static readonly Color Purple = Color.FromArgb(124, 77, 255), Blue = Color.FromArgb(40, 110, 255);
+    static readonly Color Chip = Color.FromArgb(62, 62, 78);
 
     public DockBar()
     {
-        FormBorderStyle = FormBorderStyle.None;
-        ShowInTaskbar = false;
-        TopMost = true;
-        StartPosition = FormStartPosition.Manual;
-        BackColor = Color.FromArgb(22, 22, 28);
-        DoubleBuffered = true;
-        Opacity = 0.96;
+        anim.Tick += (_, _) => { spin++; Redraw(); };
+        back.Tick += (_, _) => { back.Stop(); GoIdle(); };
     }
 
-    protected override bool ShowWithoutActivation => true;
+    bool Recording => !idle && phase is Phase.Listening or Phase.HandsFree or Phase.Command;
+    bool Busy => !idle && phase is Phase.Transcribing or Phase.Polishing or Phase.Thinking or Phase.Translating;
+    bool ShowTranslate => Settings.Current.TranslateAfterDictation;
 
-    protected override CreateParams CreateParams
+    // ───────── public API (used by Overlay + TrayApp) ─────────
+
+    public void ShowDock()
     {
-        get
+        transient = false;
+        if (!Settings.Current.ShowDock) { if (idle) Hide(); return; }
+        Redraw();
+        if (!Visible) Show();
+    }
+
+    public void SetState(DockState s) { /* state is driven by phases now */ }
+
+    public void ShowPhase(Phase p, string msg = "")
+    {
+        lock (levels) Array.Clear(levels);
+        start = DateTime.Now;
+        SetPhase(p, msg);
+    }
+
+    public void SetPhase(Phase p, string msg = "")
+    {
+        back.Stop();
+        idle = false;
+        phase = p;
+        text = msg ?? "";
+        if (!Settings.Current.ShowDock && !Visible) transient = true;
+        if (Recording || Busy) anim.Start(); else anim.Stop();
+        if (p == Phase.Done) { back.Interval = transient ? 5000 : 2500; back.Start(); }
+        if (p == Phase.Message) { back.Interval = 3000; back.Start(); }
+        Redraw();
+        if (!Visible) Show();
+    }
+
+    public void GoIdle()
+    {
+        back.Stop();
+        anim.Stop();
+        idle = true;
+        text = "";
+        if (transient || !Settings.Current.ShowDock)
         {
-            var cp = base.CreateParams;
-            cp.ExStyle |= 0x80 /*TOOLWINDOW*/ | 0x08000000 /*NOACTIVATE*/ | 0x8 /*TOPMOST*/;
-            return cp;
+            if (CardOpen()) { back.Interval = 1500; back.Start(); return; }
+            transient = false;
+            Hide();
+            return;
+        }
+        Redraw();
+    }
+
+    public void PushLevel(float l)
+    {
+        lock (levels)
+        {
+            Array.Copy(levels, 1, levels, 0, levels.Length - 1);
+            levels[^1] = l;
         }
     }
 
-    protected override void WndProc(ref Message m)
+    // ───────── layout ─────────
+
+    int H => D(56);
+    int MicD => D(46);
+    int ChipD => D(38);
+    int Pad => D(5);
+    int Gap => D(6);
+
+    Font LabelFont => new("Segoe UI Semibold", 9.5f);
+
+    string Label => phase switch
     {
-        const int WM_MOUSEACTIVATE = 0x21, MA_NOACTIVATE = 3;
-        if (m.Msg == WM_MOUSEACTIVATE) { m.Result = (IntPtr)MA_NOACTIVATE; return; }
-        base.WndProc(ref m);
+        Phase.Transcribing => "Transcribing…",
+        Phase.Polishing => "Polishing…",
+        Phase.Thinking => "Thinking…",
+        Phase.Translating => "Translating…",
+        Phase.Done => string.IsNullOrEmpty(text) ? "Inserted" : $"Inserted · {text}",
+        Phase.Message => text,
+        _ => "",
+    };
+
+    float LabelWidth()
+    {
+        using var bmp = new Bitmap(1, 1);
+        using var g = Graphics.FromImage(bmp);
+        using var f = LabelFont;
+        return Math.Min(D(380), g.MeasureString(Label, f).Width + D(14));
     }
 
-    float S => DeviceDpi / 96f;
-    int D(float v) => (int)(v * S);
+    /// Width for the current state (computed from the same layout used to draw).
+    int CurrentWidth()
+    {
+        float w = Pad + MicD;
+        if (Recording) w += Gap + D(150) + Gap + ChipD;
+        else if (Busy) w += Gap + LabelWidth();
+        else
+        {
+            if (!idle && Settings.Current.ShowOverlay) w += Gap + LabelWidth();
+            if (ShowTranslate) w += Gap + ChipD;
+            w += Gap + ChipD;
+        }
+        return (int)Math.Ceiling(w + Pad + D(2));
+    }
 
-    // ───────── placement ─────────
+    int CompactWidth => Pad + MicD + (ShowTranslate ? Gap + ChipD : 0) + Gap + ChipD + Pad + D(2);
 
-    int Btn => D(40);
-    int MicSz => D(Size1);
-    bool HasTranslate => Settings.Current.TranslateAfterDictation;
-    int Count => HasTranslate ? 3 : 2;
-    int DockW => D(6) + MicSz + (Count - 1) * (D(Gap) + Btn) + D(6);
-    int DockH => MicSz + D(8);
-
-    /// Top-left of the bubble, in screen coordinates (saved when you drag it).
+    /// Top-left of the compact bubble (saved when you drag it).
     Point Origin
     {
         get
         {
             var s = Settings.Current;
             var wa = Screen.PrimaryScreen.WorkingArea;
-            var def = new Point(wa.Right - DockW - D(24), wa.Bottom - DockH - D(24));
+            var def = new Point(wa.Right - CompactWidth - D(24), wa.Bottom - H - D(24));
             var p = s.DockX >= 0 ? new Point(s.DockX, s.DockY) : def;
-            if (!Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(new Rectangle(p, new Size(DockW, DockH))))) p = def;
+            if (!Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(new Rectangle(p, new Size(CompactWidth, H))))) p = def;
             return p;
         }
     }
 
-    public void ShowDock()
+    Rectangle TargetBounds()
     {
-        if (!Settings.Current.ShowDock) { Hide(); return; }
-        Layout2();
-        if (!Visible) Show();
-        TopMost = true;
+        var o = Origin;
+        int w = CurrentWidth();
+        var wa = Screen.FromPoint(o).WorkingArea;
+        // grow toward the free side: leftward when the bubble sits on the right half of the screen
+        bool growLeft = o.X + CompactWidth / 2 > wa.Left + wa.Width / 2;
+        int x = growLeft ? o.X + CompactWidth - w : o.X;
+        x = Math.Clamp(x, wa.Left, Math.Max(wa.Left, wa.Right - w));
+        return new Rectangle(x, o.Y, w, H);
     }
 
-    void Layout2()
+    void Redraw() => Present(TargetBounds());
+
+    // ───────── drawing ─────────
+
+    protected override void Render(Graphics g, Size size)
     {
-        Bounds = new Rectangle(Origin, new Size(DockW, DockH));
-        using var path = Capsule(new Rectangle(0, 0, DockW, DockH));
-        Region = new Region(path);
-        Invalidate();
+        hits.Clear();
+        var body = new RectangleF(D(1), D(1), size.Width - D(2) - 1, size.Height - D(2) - 1);
+        using (var path = Capsule(body))
+        {
+            using var b = new SolidBrush(Bg);
+            g.FillPath(b, path);
+            using var pen = new Pen(Rim, Math.Max(1f, 1.4f * S));
+            g.DrawPath(pen, path);
+        }
+
+        float cy = size.Height / 2f;
+        float x = Pad + D(1);
+
+        // mic / stop / spinner
+        var mic = new RectangleF(x, cy - MicD / 2f, MicD, MicD);
+        if (Recording) Circle(g, mic, Color.FromArgb(255, 69, 58), Color.FromArgb(230, 40, 40));
+        else if (Busy) Circle(g, mic, Color.FromArgb(70, 70, 88), Color.FromArgb(70, 70, 88));
+        else Circle(g, mic, Purple, Blue);
+        if (hot == HitMic) Ring(g, mic);
+        if (Recording)
+        {
+            float s = MicD * 0.30f;
+            using var w = new SolidBrush(Color.White);
+            using var sq = RoundRect(new RectangleF(mic.X + mic.Width / 2 - s / 2, mic.Y + mic.Height / 2 - s / 2, s, s), s * 0.2f);
+            g.FillPath(w, sq);
+        }
+        else if (Busy)
+        {
+            using var pen = new Pen(Color.White, 2.4f * S) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
+            var r = RectangleF.Inflate(mic, -MicD * 0.28f, -MicD * 0.28f);
+            g.DrawArc(pen, r, (spin * 22) % 360, 270);
+        }
+        else
+        {
+            using var f = new Font("Segoe UI Emoji", 14f);
+            Text(g, "🎙", mic, f, Color.White);
+        }
+        hits.Add((mic, HitMic));
+        x += MicD;
+
+        if (Recording)
+        {
+            // waveform + timer
+            x += Gap;
+            float[] snap;
+            lock (levels) snap = (float[])levels.Clone();
+            float bw = 3 * S, bg = 2.2f * S;
+            using (var wb = new SolidBrush(Color.FromArgb(235, 255, 255, 255)))
+                for (int i = 0; i < snap.Length; i++)
+                {
+                    float bh = Math.Max(3 * S, Math.Min(26 * S, snap[i] * 30 * S));
+                    using var bar = RoundRect(new RectangleF(x + i * (bw + bg), cy - bh / 2, bw, bh), bw / 2);
+                    g.FillPath(wb, bar);
+                }
+            var secs = (int)(DateTime.Now - start).TotalSeconds;
+            using (var tf = new Font("Consolas", 9f))
+                Text(g, $"{secs / 60}:{secs % 60:00}", new RectangleF(x + D(150) - D(38), cy - D(10), D(38), D(20)), tf, Color.FromArgb(170, 255, 255, 255), StringAlignment.Far);
+            x += D(150) + Gap;
+            var cancel = new RectangleF(x, cy - ChipD / 2f, ChipD, ChipD);
+            Circle(g, cancel, Chip, Chip);
+            if (hot == HitCancel) Ring(g, cancel);
+            using (var f = new Font("Segoe UI", 11f, FontStyle.Bold)) Text(g, "✕", cancel, f, Color.White);
+            hits.Add((cancel, HitCancel));
+            return;
+        }
+
+        if (Busy || (!idle && Settings.Current.ShowOverlay))
+        {
+            x += Gap;
+            float lw = LabelWidth();
+            var color = phase == Phase.Message ? Color.FromArgb(255, 214, 10) : phase == Phase.Done ? Color.FromArgb(120, 230, 150) : Color.White;
+            using (var f = LabelFont)
+                Text(g, Label, new RectangleF(x, cy - D(12), lw, D(24)), f, color, StringAlignment.Near);
+            x += lw;
+            if (Busy) return;
+        }
+
+        if (ShowTranslate)
+        {
+            x += Gap;
+            var tr = new RectangleF(x, cy - ChipD / 2f, ChipD, ChipD);
+            Circle(g, tr, Chip, Chip);
+            if (hot == HitTranslate) Ring(g, tr);
+            using (var f = new Font("Segoe UI", 9.5f, FontStyle.Bold)) Text(g, "文A", tr, f, Color.White);
+            hits.Add((tr, HitTranslate));
+            x += ChipD;
+        }
+        x += Gap;
+        var rc = new RectangleF(x, cy - ChipD / 2f, ChipD, ChipD);
+        Circle(g, rc, Chip, Chip);
+        if (hot == HitRecent) Ring(g, rc);
+        using (var f = new Font("Segoe UI Emoji", 11f)) Text(g, "📋", rc, f, Color.White);
+        hits.Add((rc, HitRecent));
     }
 
-    public void SetState(DockState s) { state = s; Invalidate(); }
-
-    /// Kept for compatibility: the bubble is always fully visible now.
-    public void ExpandFor(int ms) { if (Settings.Current.ShowDock && !Visible) ShowDock(); TopMost = true; }
+    void Ring(Graphics g, RectangleF r)
+    {
+        using var p = new Pen(Color.FromArgb(210, 255, 255, 255), 2f * S);
+        g.DrawEllipse(p, RectangleF.Inflate(r, -1, -1));
+    }
 
     // ───────── input ─────────
 
-    Rectangle MicRect => new(D(6), D(4), MicSz, MicSz);
-    Rectangle SmallRect(int i) => new(D(6) + MicSz + D(Gap) + i * (Btn + D(Gap)), (DockH - Btn) / 2, Btn, Btn);
-
-    /// 0 = mic, 1 = 文A (if shown), 2 = 📋
     int HitTest(Point p)
     {
-        if (MicRect.Contains(p)) return 0;
-        if (HasTranslate)
-        {
-            if (SmallRect(0).Contains(p)) return 1;
-            if (SmallRect(1).Contains(p)) return 2;
-        }
-        else if (SmallRect(0).Contains(p)) return 2;
+        foreach (var (r, id) in hits) if (r.Contains(p)) return id;
         return -1;
     }
 
-    protected override void OnMouseLeave(EventArgs e) { hot = -1; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseLeave(EventArgs e) { if (hot != -1) { hot = -1; Redraw(); } base.OnMouseLeave(e); }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
@@ -123,22 +294,22 @@ sealed class DockBar : Form
         pressed = true;
         dragging = false;
         downScreen = Cursor.Position;
-        downLocation = Origin;
+        downOrigin = Origin;
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         int h = HitTest(e.Location);
-        if (h != hot) { hot = h; Invalidate(); }
+        if (h != hot) { hot = h; Redraw(); }
         if (!pressed) return;
         var c = Cursor.Position;
         if (!dragging && (Math.Abs(c.X - downScreen.X) > D(5) || Math.Abs(c.Y - downScreen.Y) > D(5))) dragging = true;
         if (dragging)
         {
             var s = Settings.Current;
-            s.DockX = downLocation.X + (c.X - downScreen.X);
-            s.DockY = downLocation.Y + (c.Y - downScreen.Y);
-            Location = new Point(s.DockX, s.DockY);
+            s.DockX = downOrigin.X + (c.X - downScreen.X);
+            s.DockY = downOrigin.Y + (c.Y - downScreen.Y);
+            Redraw();
         }
     }
 
@@ -149,70 +320,10 @@ sealed class DockBar : Form
         if (dragging) { dragging = false; Settings.Current.Save(); return; }
         switch (HitTest(e.Location))
         {
-            case 0: Mic?.Invoke(); break;
-            case 1: Translate?.Invoke(); break;
-            case 2: Recent?.Invoke(); break;
+            case HitMic: Mic?.Invoke(); break;
+            case HitTranslate: Translate?.Invoke(); break;
+            case HitRecent: Recent?.Invoke(); break;
+            case HitCancel: Cancel?.Invoke(); break;
         }
-    }
-
-    // ───────── drawing ─────────
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        var g = e.Graphics;
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-        using (var rim = new Pen(Color.FromArgb(110, 255, 255, 255), D(1.5f)))
-        using (var path = Capsule(new Rectangle(0, 0, Width - 1, Height - 1)))
-            g.DrawPath(rim, path);
-
-        var mic = MicRect;
-        if (state == DockState.Recording) Fill(g, mic, Color.FromArgb(255, 59, 48), Color.FromArgb(255, 59, 48));
-        else if (state == DockState.Busy) Fill(g, mic, Color.FromArgb(255, 159, 10), Color.FromArgb(255, 120, 10));
-        else Fill(g, mic, Purple, Blue);
-        if (hot == 0) Ring(g, mic);
-        Glyph(g, state == DockState.Recording ? "■" : state == DockState.Busy ? "…" : "🎙", mic, 15f);
-
-        int i = 0;
-        if (HasTranslate)
-        {
-            var tr = SmallRect(i++);
-            Fill(g, tr, Color.FromArgb(64, 64, 80), Color.FromArgb(64, 64, 80));
-            if (hot == 1) Ring(g, tr);
-            Glyph(g, "文A", tr, 10f, bold: true);
-        }
-        var rc = SmallRect(i);
-        Fill(g, rc, Color.FromArgb(64, 64, 80), Color.FromArgb(64, 64, 80));
-        if (hot == 2) Ring(g, rc);
-        Glyph(g, "📋", rc, 12f);
-    }
-
-    static void Fill(Graphics g, Rectangle r, Color a, Color b)
-    {
-        using var br = new LinearGradientBrush(r, a, b, LinearGradientMode.ForwardDiagonal);
-        g.FillEllipse(br, r);
-    }
-
-    void Ring(Graphics g, Rectangle r)
-    {
-        using var p = new Pen(Color.FromArgb(200, 255, 255, 255), D(2));
-        g.DrawEllipse(p, r);
-    }
-
-    static void Glyph(Graphics g, string t, Rectangle r, float size, bool bold = false)
-    {
-        using var f = new Font(t == "文A" ? "Segoe UI" : "Segoe UI Emoji", size, bold ? FontStyle.Bold : FontStyle.Regular);
-        var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString(t, f, Brushes.White, r, sf);
-    }
-
-    static GraphicsPath Capsule(Rectangle r)
-    {
-        var p = new GraphicsPath();
-        int d = Math.Min(r.Width, r.Height);
-        p.AddArc(r.X, r.Y, d, d, 90, 180);
-        p.AddArc(r.Right - d, r.Y, d, d, 270, 180);
-        p.CloseFigure();
-        return p;
     }
 }

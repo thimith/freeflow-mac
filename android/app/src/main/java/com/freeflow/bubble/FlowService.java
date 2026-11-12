@@ -216,7 +216,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
     private class Toucher implements View.OnTouchListener {
         final Runnable tap;
         float downX, downY;
-        int startY;
+        int startY, startX;
         boolean dragging, longPressed;
         final int slop = ViewConfiguration.get(FlowService.this).getScaledTouchSlop();
         final Runnable longTask = new Runnable() {
@@ -235,7 +235,9 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     downX = e.getRawX(); downY = e.getRawY(); startY = lp.y;
+                    startX = bubbleLeftX();
                     dragging = false; longPressed = false;
+                    if (snapAnim != null) snapAnim.cancel();
                     h.postDelayed(longTask, 600);
                     return true;
                 case MotionEvent.ACTION_MOVE:
@@ -244,10 +246,16 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
                         dragging = true;
                         h.removeCallbacks(longTask);
                         closePopup();
+                        hideUndo();
+                        // measure from the left edge while dragging so the bubble can follow the finger anywhere
+                        lp.gravity = Gravity.TOP | Gravity.LEFT;
+                        lp.x = startX;
                     }
                     if (dragging) {
                         int maxY = screen().heightPixels - bubble.getHeight() - dp(24);
+                        int maxX = screenWidth() - bubble.getWidth();
                         lp.y = Math.max(dp(24), Math.min(maxY, (int) (startY + dy)));
+                        lp.x = Math.max(0, Math.min(maxX, (int) (startX + dx)));
                         try { wm.updateViewLayout(bubble, lp); } catch (Exception ignored) { }
                     }
                     return true;
@@ -255,10 +263,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
                 case MotionEvent.ACTION_CANCEL:
                     h.removeCallbacks(longTask);
                     if (dragging) {
-                        boolean left = e.getRawX() < screen().widthPixels / 2f;
-                        lp.gravity = Gravity.TOP | (left ? Gravity.LEFT : Gravity.RIGHT);
-                        try { wm.updateViewLayout(bubble, lp); } catch (Exception ignored) { }
-                        prefs.bubblePos(lp.y, left);
+                        snapToEdge();
                     } else if (!longPressed && e.getActionMasked() == MotionEvent.ACTION_UP) {
                         tap.run();
                     }
@@ -266,6 +271,47 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
             }
             return false;
         }
+    }
+
+    private android.animation.ValueAnimator snapAnim;
+
+    private int screenWidth() {
+        try { return wm.getCurrentWindowMetrics().getBounds().width(); }
+        catch (Throwable t) { return screen().widthPixels; }
+    }
+
+    /** Current distance of the bubble's left side from the screen's left edge, whatever its gravity. */
+    private int bubbleLeftX() {
+        boolean right = (lp.gravity & Gravity.RIGHT) == Gravity.RIGHT;
+        return right ? screenWidth() - bubble.getWidth() - lp.x : lp.x;
+    }
+
+    /** Glide to whichever side is closer, easing out, then pin to that edge. */
+    private void snapToEdge() {
+        int w = bubble.getWidth(), sw = screenWidth();
+        boolean left = lp.x + w / 2f < sw / 2f;
+        int margin = dp(2);
+        int target = left ? margin : sw - w - margin;
+        snapAnim = android.animation.ValueAnimator.ofInt(lp.x, target);
+        snapAnim.setDuration(Math.min(320, 140 + Math.abs(target - lp.x) / 4));
+        snapAnim.setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f));
+        snapAnim.addUpdateListener(a -> {
+            lp.x = (int) a.getAnimatedValue();
+            try { wm.updateViewLayout(bubble, lp); } catch (Exception ignored) { }
+        });
+        snapAnim.addListener(new android.animation.AnimatorListenerAdapter() {
+            boolean cancelled;
+            @Override public void onAnimationCancel(android.animation.Animator a) { cancelled = true; }
+            @Override public void onAnimationEnd(android.animation.Animator a) {
+                if (cancelled) return;
+                // pin to the edge (so it stays put if the screen size changes)
+                lp.gravity = Gravity.TOP | (left ? Gravity.LEFT : Gravity.RIGHT);
+                lp.x = margin;
+                try { wm.updateViewLayout(bubble, lp); } catch (Exception ignored) { }
+                prefs.bubblePos(lp.y, left);
+            }
+        });
+        snapAnim.start();
     }
 
     private void haptic(View v) {

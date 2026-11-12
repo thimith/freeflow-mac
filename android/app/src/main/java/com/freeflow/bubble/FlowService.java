@@ -54,6 +54,9 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
     private boolean shown;
 
     private View popup;
+    private View cancelChip;
+    /** Bumped on every cancel, so late results from a cancelled dictation are thrown away. */
+    private int job;
     private long popupClosedAt;
     private View undoChip;
     private TextTarget undoTarget;
@@ -199,6 +202,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
     }
 
     private void removeAll() {
+        hideCancel();
         closePopup();
         hideUndo();
         setShown(false);
@@ -324,6 +328,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         active = m == Mode.EDIT ? edit : mic;
         active.setState(m == Mode.EDIT ? BubbleButton.State.EDIT_RECORDING : BubbleButton.State.RECORDING);
         haptic(active);
+        showCancel();
         try {
             startForegroundService(new Intent(this, RecorderService.class));
         } catch (Exception e) {
@@ -365,6 +370,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         holdMode = false;
         if (Mic.isRunning()) Mic.cancel();
         RecorderService.stop(this);
+        hideCancel();
         error(why);
     }
 
@@ -382,6 +388,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         final BubbleButton b = active;
         haptic(b);
         if (wav == null || peak < 0.15f) {
+            hideCancel();
             if (wav != null) wav.delete();
             flash(b, BubbleButton.State.ERROR, 900);
             Toast.makeText(this, "No speech detected", Toast.LENGTH_SHORT).show();
@@ -392,14 +399,18 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         final TextTarget t = target;
         final Mode m = mode;
         final String source = editSource;
+        final int my = ++job;
         io.execute(() -> {
             try {
                 String raw = Groq.transcribe(prefs, wav);
-                if (raw.isEmpty()) { h.post(() -> { busy = false; error("No speech detected"); }); return; }
+                if (my != job) return;
+                if (raw.isEmpty()) { h.post(() -> { if (my != job) return; busy = false; hideCancel(); error("No speech detected"); }); return; }
                 final String out = m == Mode.EDIT ? Groq.voiceEdit(prefs, raw, source)
                         : prefs.aiCleanup() ? Groq.cleanup(prefs, raw) : raw;
                 h.post(() -> {
+                    if (my != job) return;   // cancelled with ✕
                     busy = false;
+                    hideCancel();
                     boolean ok;
                     if (m == Mode.EDIT) {
                         rememberUndo(t);
@@ -411,11 +422,63 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
                     refresh();
                 });
             } catch (Exception e) {
-                h.post(() -> { busy = false; error(e.getMessage() == null ? "Something went wrong" : e.getMessage()); refresh(); });
+                h.post(() -> { if (my != job) return; busy = false; hideCancel(); error(e.getMessage() == null ? "Something went wrong" : e.getMessage()); refresh(); });
             } finally {
                 wav.delete();
             }
         });
+    }
+
+    // ───────── ✕ cancel ─────────
+
+    /** Throw away the current dictation (while recording or while it's being transcribed). */
+    private void cancelDictation() {
+        job++;
+        h.removeCallbacks(micCheck);
+        if (recording) {
+            recording = false;
+            holdMode = false;
+            Mic.cancel();
+            RecorderService.stop(this);
+        }
+        busy = false;
+        if (active != null) active.setState(BubbleButton.State.IDLE);
+        hideCancel();
+        if (prefs.haptics() && bubble != null) bubble.performHapticFeedback(HapticFeedbackConstants.REJECT);
+        refresh();
+    }
+
+    private void showCancel() {
+        hideCancel();
+        TextView x = new TextView(this);
+        x.setText("✕");
+        x.setTextColor(Color.WHITE);
+        x.setTextSize(18);
+        x.setGravity(Gravity.CENTER);
+        x.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(Color.rgb(58, 58, 70));
+        g.setStroke(dp(2), Color.argb(150, 255, 255, 255));
+        x.setBackground(g);
+        x.setElevation(dp(8));
+        x.setOnClickListener(v -> cancelDictation());
+        int size = dp(prefs.largeBubble() ? 46 : 40);
+        WindowManager.LayoutParams p = new WindowManager.LayoutParams(size, size,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT);
+        p.gravity = lp.gravity;
+        p.x = lp.x + (bubble.getWidth() > 0 ? bubble.getWidth() : dp(70)) + dp(6);
+        int micCenter = mic.getHeight() > 0 ? mic.getTop() + mic.getHeight() / 2 : dp(150);
+        p.y = lp.y + micCenter - size / 2;
+        try { wm.addView(x, p); cancelChip = x; } catch (Exception ignored) { }
+    }
+
+    private void hideCancel() {
+        if (cancelChip == null) return;
+        try { wm.removeView(cancelChip); } catch (Exception ignored) { }
+        cancelChip = null;
     }
 
     // ───────── translate menu ─────────

@@ -21,15 +21,55 @@ public final class Groq {
         public GroqException(String m) { super(m); }
     }
 
+    /** Groq retired the model we asked for (404 / decommissioned). */
+    private static final class ModelGone extends Exception { }
+
+    // Preferred models, best first. Groq retires models regularly, so we fall back to whatever is live.
+    private static final String[] CHAT_PREFS = {
+            "llama-3.3-70b-versatile", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct",
+            "meta-llama/llama-4-maverick-17b-128e-instruct", "openai/gpt-oss-20b",
+            "meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant", "qwen/qwen3-32b"};
+    private static final String[] STT_PREFS = {"whisper-large-v3-turbo", "whisper-large-v3"};
+
+    /** Ask Groq which models exist right now and pick the best one we know (or any sensible one). */
+    private static String pickModel(Prefs prefs, boolean speech) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/models").openConnection();
+        c.setConnectTimeout(10_000);
+        c.setReadTimeout(15_000);
+        c.setRequestProperty("Authorization", "Bearer " + requireKey(prefs));
+        JSONArray data = new JSONObject(read(c)).getJSONArray("data");
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        for (int i = 0; i < data.length(); i++) ids.add(data.getJSONObject(i).optString("id"));
+        for (String m : speech ? STT_PREFS : CHAT_PREFS) if (ids.contains(m)) return m;
+        for (String id : ids) {
+            String l = id.toLowerCase();
+            boolean isWhisper = l.contains("whisper");
+            if (speech && isWhisper) return id;
+            if (!speech && !isWhisper && !l.contains("tts") && !l.contains("guard") && !l.contains("orpheus")
+                    && !l.contains("playai") && !l.contains("compound")) return id;
+        }
+        throw new GroqException(speech ? "Groq has no speech model available" : "Groq has no chat model available");
+    }
+
     // ───────── speech-to-text ─────────
 
     public static String transcribe(Prefs prefs, File wav) throws Exception {
+        try {
+            return transcribeWith(prefs, wav, prefs.whisperModel());
+        } catch (ModelGone g) {
+            String m = pickModel(prefs, true);
+            prefs.whisperModel(m);
+            return transcribeWith(prefs, wav, m);
+        }
+    }
+
+    private static String transcribeWith(Prefs prefs, File wav, String model) throws Exception {
         String key = requireKey(prefs);
         String boundary = "FreeFlow" + UUID.randomUUID();
         HttpURLConnection c = open(BASE + "/audio/transcriptions", key, 60_000);
         c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
         try (OutputStream out = c.getOutputStream()) {
-            field(out, boundary, "model", prefs.whisperModel());
+            field(out, boundary, "model", model);
             field(out, boundary, "response_format", "json");
             field(out, boundary, "temperature", "0");
             String lang = prefs.spokenLanguage();
@@ -111,9 +151,19 @@ public final class Groq {
     }
 
     private static String chat(Prefs prefs, String system, String user) throws Exception {
+        try {
+            return chatWith(prefs, prefs.llmModel(), system, user);
+        } catch (ModelGone g) {
+            String m = pickModel(prefs, false);
+            prefs.llmModel(m);
+            return chatWith(prefs, m, system, user);
+        }
+    }
+
+    private static String chatWith(Prefs prefs, String model, String system, String user) throws Exception {
         String key = requireKey(prefs);
         JSONObject body = new JSONObject();
-        body.put("model", prefs.llmModel());
+        body.put("model", model);
         body.put("temperature", 0.2);
         JSONArray msgs = new JSONArray();
         msgs.put(new JSONObject().put("role", "system").put("content", system));
@@ -167,6 +217,9 @@ public final class Groq {
         String body = bo.toString("UTF-8");
         if (code == 401) throw new GroqException("Groq key rejected — check it in the FreeFlow app");
         if (code == 429) throw new GroqException("Groq rate limit — try again in a moment");
+        String low = body.toLowerCase();
+        if (code == 404 || low.contains("model_not_found") || low.contains("decommissioned")
+                || (code == 400 && low.contains("model") && low.contains("does not exist"))) throw new ModelGone();
         if (code >= 400) {
             String msg = body;
             try { msg = new JSONObject(body).getJSONObject("error").optString("message", body); } catch (Exception ignored) { }

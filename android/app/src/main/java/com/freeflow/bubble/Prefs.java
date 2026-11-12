@@ -17,7 +17,9 @@ public final class Prefs {
     public void spokenLanguage(String v) { p.edit().putString("spoken", v).apply(); }
 
     public String whisperModel() { return p.getString("whisperModel", "whisper-large-v3-turbo"); }
+    public void whisperModel(String v) { p.edit().putString("whisperModel", v).apply(); }
     public String llmModel() { return p.getString("llmModel", "llama-3.3-70b-versatile"); }
+    public void llmModel(String v) { p.edit().putString("llmModel", v).apply(); }
 
     /** Off by default: dictation comes back exactly as Whisper heard it (minus artifacts). */
     public boolean aiCleanup() { return p.getBoolean("aiCleanup", false); }

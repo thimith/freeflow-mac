@@ -206,7 +206,7 @@ public class MainActivity extends Activity {
             String msg;
             try {
                 String out = Groq.translate(prefs, "Hello, how are you?", Langs.byId("es-CO"));
-                msg = "✅ Key works: “" + out + "”";
+                msg = "✅ Key works (" + prefs.llmModel() + "): “" + out + "”";
             } catch (Exception e) {
                 msg = "⚠ " + e.getMessage();
             }

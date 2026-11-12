@@ -47,7 +47,9 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
     private WindowManager wm;
 
     private LinearLayout bubble;
-    private BubbleButton mic, tr;
+    private BubbleButton mic, tr, edit;
+    /** The button showing the current recording (mic for dictation, ✨ for voice edits). */
+    private BubbleButton active;
     private WindowManager.LayoutParams lp;
     private boolean shown;
 
@@ -161,6 +163,11 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         bubble.setBackground(capsule);
         bubble.setElevation(dp(12));
 
+        edit = new BubbleButton(this, BubbleButton.Kind.EDIT);
+        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(small, small);
+        elp.bottomMargin = dp(6);
+        bubble.addView(edit, elp);
+
         tr = new BubbleButton(this, BubbleButton.Kind.TRANSLATE);
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(small, small);
         tlp.bottomMargin = dp(6);
@@ -171,6 +178,8 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
 
         mic.setOnTouchListener(new Toucher(this::micTap, this::micHoldStart, this::micHoldEnd));
         tr.setOnTouchListener(new Toucher(this::translateTap, null, null));
+        edit.setOnTouchListener(new Toucher(this::editTap, this::editHoldStart, this::micHoldEnd));
+        active = mic;
 
         lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
@@ -258,7 +267,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
     }
 
     private void error(String msg) {
-        flash(mic, BubbleButton.State.ERROR, 1400);
+        flash(active != null ? active : mic, BubbleButton.State.ERROR, 1400);
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
     }
 
@@ -272,6 +281,16 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         if (recording) { holdMode = false; stopRecording(); }
         else { holdMode = false; startRecording(Mode.DICTATE); }
     }
+
+    private void editTap() {
+        if (busy) return;
+        closePopup();
+        if (recording) { holdMode = false; stopRecording(); return; }
+        holdMode = false;
+        startRecording(Mode.EDIT);
+    }
+
+    private void editHoldStart() { holdMode = true; startRecording(Mode.EDIT); }
 
     private void micHoldStart() { holdMode = true; startRecording(Mode.DICTATE); }
 
@@ -302,8 +321,9 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         editSource = m == Mode.EDIT ? target.selectedOrAll() : null;
         recording = true;
         triedTrampoline = false;
-        mic.setState(m == Mode.EDIT ? BubbleButton.State.EDIT_RECORDING : BubbleButton.State.RECORDING);
-        haptic(mic);
+        active = m == Mode.EDIT ? edit : mic;
+        active.setState(m == Mode.EDIT ? BubbleButton.State.EDIT_RECORDING : BubbleButton.State.RECORDING);
+        haptic(active);
         try {
             startForegroundService(new Intent(this, RecorderService.class));
         } catch (Exception e) {
@@ -348,7 +368,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         error(why);
     }
 
-    @Override public void onLevel(float level) { if (recording) mic.setLevel(level); }
+    @Override public void onLevel(float level) { if (recording) active.setLevel(level); }
     @Override public void onStarted() { }
     @Override public void onFailed(String why) { if (recording) onMicFailed(why); }
 
@@ -359,15 +379,16 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         File wav = Mic.stop(getCacheDir());
         float peak = Mic.peak();
         RecorderService.stop(this);
-        haptic(mic);
+        final BubbleButton b = active;
+        haptic(b);
         if (wav == null || peak < 0.15f) {
             if (wav != null) wav.delete();
-            flash(mic, BubbleButton.State.ERROR, 900);
+            flash(b, BubbleButton.State.ERROR, 900);
             Toast.makeText(this, "No speech detected", Toast.LENGTH_SHORT).show();
             return;
         }
         busy = true;
-        mic.setState(BubbleButton.State.BUSY);
+        b.setState(BubbleButton.State.BUSY);
         final TextTarget t = target;
         final Mode m = mode;
         final String source = editSource;
@@ -385,7 +406,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
                         ok = t.replaceSelectedOrAll(this, out);
                         if (ok) showUndo();
                     } else ok = t.insert(this, out);
-                    if (ok) flash(mic, BubbleButton.State.DONE, 700);
+                    if (ok) flash(b, BubbleButton.State.DONE, 700);
                     else error("This app didn't accept the text — it's on your clipboard");
                     refresh();
                 });
@@ -444,7 +465,6 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
                 n++;
             }
             card.addView(tile("🌐  More languages", () -> showMenu(true)), full());
-            card.addView(tile("✨  Edit by voice", this::startVoiceEdit), full());
         }
 
         FrameLayout root = new FrameLayout(this);
@@ -529,13 +549,6 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         });
     }
 
-    private void startVoiceEdit() {
-        closePopup();
-        if (!ready()) return;
-        holdMode = false;
-        startRecording(Mode.EDIT);
-        Toast.makeText(this, "Say how to change the text, then tap the bubble", Toast.LENGTH_SHORT).show();
-    }
 
     // ───────── undo ─────────
 

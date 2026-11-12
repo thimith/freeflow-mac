@@ -13,7 +13,7 @@ import android.view.View;
 
 /** A round, self-drawn button: the mic bubble or the translate button above it. */
 public class BubbleButton extends View {
-    public enum Kind { MIC, TRANSLATE }
+    public enum Kind { MIC, TRANSLATE, EDIT }
     public enum State { IDLE, RECORDING, EDIT_RECORDING, BUSY, DONE, ERROR }
 
     private final Kind kind;
@@ -73,7 +73,9 @@ public class BubbleButton extends View {
             case DONE: fill.setShader(null); fill.setColor(Color.rgb(48, 199, 89)); break;
             case ERROR: fill.setShader(null); fill.setColor(Color.rgb(255, 159, 10)); break;
             default:
-                if (kind == Kind.MIC)
+                if (kind == Kind.EDIT)
+                    fill.setShader(new LinearGradient(0, 0, w, h, Color.rgb(170, 110, 255), Color.rgb(236, 72, 153), Shader.TileMode.CLAMP));
+                else if (kind == Kind.MIC)
                     fill.setShader(new LinearGradient(0, 0, w, h, Color.rgb(124, 77, 255), Color.rgb(40, 110, 255), Shader.TileMode.CLAMP));
                 else { fill.setShader(null); fill.setColor(Color.rgb(64, 64, 80)); }
         }
@@ -103,6 +105,7 @@ public class BubbleButton extends View {
             c.drawText("!", cx, cy + br * 0.35f, text);
         } else if (state != State.BUSY) {
             if (kind == Kind.MIC) drawMic(c, cx, cy, br);
+            else if (kind == Kind.EDIT) drawEdit(c, cx, cy, br);
             else drawTranslate(c, cx, cy, br);
         }
     }
@@ -123,6 +126,25 @@ public class BubbleButton extends View {
         c.drawArc(new RectF(cx - ar, cy - ar - r * 0.12f, cx + ar, cy + ar - r * 0.12f), 15, 150, false, icon);
         c.drawLine(cx, cy + ar - r * 0.12f, cx, cy + r * 0.42f, icon);
         c.drawLine(cx - r * 0.18f, cy + r * 0.42f, cx + r * 0.18f, cy + r * 0.42f, icon);
+    }
+
+    /** Pencil + sparkles: "improve my text by voice". */
+    private void drawEdit(Canvas c, float cx, float cy, float r) {
+        if (state == State.EDIT_RECORDING) { drawMic(c, cx, cy, r); return; }   // shows the stop square
+        icon.setStyle(Paint.Style.STROKE);
+        float s = r * 0.42f;
+        c.drawLine(cx - s * 0.8f, cy + s * 0.8f, cx + s * 0.45f, cy - s * 0.45f, icon);   // pencil
+        icon.setStyle(Paint.Style.FILL);
+        c.drawCircle(cx - s * 0.85f, cy + s * 0.85f, icon.getStrokeWidth() * 0.6f, icon);
+        star(c, cx + s * 0.55f, cy - s * 0.75f, r * 0.2f);
+        star(c, cx + s * 0.95f, cy + s * 0.05f, r * 0.12f);
+        icon.setStyle(Paint.Style.STROKE);
+    }
+
+    private void star(Canvas c, float x, float y, float s) {
+        Path p = new Path();
+        p.moveTo(x, y - s); p.quadTo(x, y, x + s, y); p.quadTo(x, y, x, y + s); p.quadTo(x, y, x - s, y); p.quadTo(x, y, x, y - s);
+        c.drawPath(p, icon);
     }
 
     private void drawTranslate(Canvas c, float cx, float cy, float r) {

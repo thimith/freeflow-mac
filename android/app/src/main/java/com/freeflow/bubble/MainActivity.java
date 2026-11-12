@@ -61,7 +61,8 @@ public class MainActivity extends Activity {
         root.addView(title);
         root.addView(note("Voice typing and translation over any app — keep Gboard as your keyboard. "
                 + "Tap the bubble to talk (tap again to finish) or hold it while you speak. Drag it to move it. "
-                + "The 文A button above it translates what you've typed."));
+                + "Above it: 文A translates what you've typed, and ✨ lets you say how to improve it "
+                + "(“make it friendlier”, “fix the grammar”, “shorter”). Select part of the text to change only that."));
 
         // ── setup checklist
         root.addView(header("Setup"));

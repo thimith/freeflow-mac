@@ -45,11 +45,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: FreeFlow-Setup
-          path: windows/out/FreeFlow-Setup.exe
+          path: windows/out/FreeFlow-Setup-v*.exe
 
       - name: Publish release
         run: |
-          gh release create "win-v$env:FF_VERSION" out/FreeFlow-Setup.exe `
+          gh release create "win-v$env:FF_VERSION" "out/FreeFlow-Setup-v$env:FF_VERSION.exe" `
             --title "FreeFlow for Windows $env:FF_VERSION" `
             --latest=false `
             --notes "Run FreeFlow-Setup.exe. If Windows SmartScreen appears: More info, then Run anyway. Windows 10/11, 64-bit."

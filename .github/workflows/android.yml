@@ -54,16 +54,16 @@ jobs:
         run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: Rename
-        run: cp app/build/outputs/apk/release/app-release.apk FreeFlow-Bubble.apk
+        run: cp app/build/outputs/apk/release/app-release.apk FreeFlow-Bubble-v$FF_VERSION.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: FreeFlow-Bubble
-          path: android/FreeFlow-Bubble.apk
+          path: android/FreeFlow-Bubble-v*.apk
 
       - name: Publish release
         run: |
-          gh release create "android-v$FF_VERSION" FreeFlow-Bubble.apk \
+          gh release create "android-v$FF_VERSION" "FreeFlow-Bubble-v$FF_VERSION.apk" \
             --title "FreeFlow Bubble for Android $FF_VERSION" \
             --latest=false \
             --notes "Install the APK (allow installing from your browser/Files app when asked), open FreeFlow Bubble and follow the setup checklist."

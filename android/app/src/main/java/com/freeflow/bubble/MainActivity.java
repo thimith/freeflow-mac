@@ -2,11 +2,13 @@ package com.freeflow.bubble;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -21,117 +23,107 @@ import android.text.TextWatcher;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.util.ArrayList;
-import java.util.List;
-
-/** Setup checklist + settings. */
+/** Setup checklist + settings, in the same dark/gradient look as the bubble. */
 public class MainActivity extends Activity {
+    // palette
+    static final int BG = 0xFF0E0E14, CARD = 0xFF1A1A24, CARD2 = 0xFF242432, LINE = 0x22FFFFFF;
+    static final int TEXT = 0xFFFFFFFF, MUTED = 0xFF9A9AB2;
+    static final int PURPLE = 0xFF7C4DFF, BLUE = 0xFF286EFF, PINK = 0xFFEC4899, GREEN = 0xFF30C759, ORANGE = 0xFFFF9F0A;
+
     private Prefs prefs;
-    private LinearLayout checklist;
+    private LinearLayout checklist, langSlots, spokenChips;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = new Prefs(this);
         RecorderService.ensureChannel(this);
+        getWindow().setStatusBarColor(BG);
+        getWindow().setNavigationBarColor(BG);
 
         ScrollView sv = new ScrollView(this);
+        sv.setBackgroundColor(BG);
         sv.setFitsSystemWindows(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(24), dp(20), dp(40));
+        root.setPadding(dp(16), dp(16), dp(16), dp(40));
         sv.addView(root);
         setContentView(sv);
 
-        TextView title = new TextView(this);
-        title.setText("FreeFlow Bubble");
-        title.setTextSize(28);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(title);
-        root.addView(note("Voice typing and translation over any app — keep Gboard as your keyboard. "
-                + "Tap the bubble to talk (tap again to finish) or hold it while you speak. Drag it to move it. "
-                + "Above it: 文A translates what you've typed, and ✨ lets you say how to improve it "
-                + "(“make it friendlier”, “fix the grammar”, “shorter”). Select part of the text to change only that."));
+        root.addView(hero());
 
-        // ── setup checklist
-        root.addView(header("Setup"));
+        // ── setup
+        LinearLayout setup = card(root, "🚀", "Setup", "A few one-time steps so the bubble works everywhere");
         checklist = new LinearLayout(this);
         checklist.setOrientation(LinearLayout.VERTICAL);
-        root.addView(checklist);
+        setup.addView(checklist);
 
-        // ── Groq key
-        root.addView(header("Groq API key"));
-        root.addView(note("Same free key as your FreeFlow keyboard. Powers speech-to-text, translation and voice edits."));
-        EditText key = new EditText(this);
-        key.setHint("gsk_…");
-        key.setSingleLine(true);
-        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        key.setText(prefs.groqKey());
-        key.addTextChangedListener(new Watcher(s -> prefs.groqKey(s)));
-        root.addView(key);
-        LinearLayout keyRow = row();
-        keyRow.addView(button("Paste", v -> {
+        // ── key
+        LinearLayout key = card(root, "🔑", "Groq API key", "Free — powers voice, translation and ✨ edits");
+        EditText keyField = field("gsk_…", prefs.groqKey(), true);
+        keyField.addTextChangedListener(new Watcher(s -> { prefs.groqKey(s); buildChecklist(); }));
+        key.addView(keyField);
+        LinearLayout keyBtns = hrow();
+        keyBtns.setPadding(0, dp(10), 0, 0);
+        keyBtns.addView(pill("Paste", true, v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             ClipData clip = cm.getPrimaryClip();
-            if (clip != null && clip.getItemCount() > 0) key.setText(clip.getItemAt(0).coerceToText(this).toString().trim());
+            if (clip != null && clip.getItemCount() > 0) keyField.setText(clip.getItemAt(0).coerceToText(this).toString().trim());
         }));
-        keyRow.addView(button("Test", v -> testKey()));
-        keyRow.addView(button("Get a free key", v -> open("https://console.groq.com/keys")));
-        root.addView(keyRow);
+        keyBtns.addView(pill("Test", false, v -> testKey()));
+        keyBtns.addView(pill("Get a free key", false, v -> open("https://console.groq.com/keys")));
+        key.addView(scroll(keyBtns));
 
         // ── voice
-        root.addView(header("Voice"));
-        List<String> spoken = new ArrayList<>();
-        int spokenIdx = 0;
-        for (int i = 0; i < Langs.SPOKEN.length; i++) {
-            spoken.add(Langs.SPOKEN[i][1]);
-            if (Langs.SPOKEN[i][0].equals(prefs.spokenLanguage())) spokenIdx = i;
-        }
-        root.addView(label("I speak"));
-        root.addView(spinner(spoken, spokenIdx, i -> prefs.spokenLanguage(Langs.SPOKEN[i][0])));
-        root.addView(note("Auto-detect handles switching between French, English and Spanish."));
-        root.addView(toggle("AI cleanup (remove ums, fix punctuation)", prefs.aiCleanup(), prefs::aiCleanup));
-        root.addView(note("Off = your words exactly as Whisper heard them."));
+        LinearLayout voice = card(root, "🎙", "Voice", "How you talk to the bubble");
+        voice.addView(label("I speak"));
+        spokenChips = hrow();
+        voice.addView(scroll(spokenChips));
+        buildSpoken();
+        voice.addView(note("Auto-detect follows you between French, English and Spanish."));
+        voice.addView(toggle("AI cleanup", "Removes ums, applies self-corrections (“3pm, no actually 4pm” → 4pm), fixes punctuation",
+                prefs.aiCleanup(), PURPLE, prefs::aiCleanup));
 
         // ── translation
-        root.addView(header("Translation languages"));
-        root.addView(note("Up to 4 shown as quick tiles. Every language stays one tap away under “More languages”."));
-        List<String> choices = new ArrayList<>();
-        choices.add("— none —");
-        for (Langs.Lang l : Langs.ALL) choices.add(l.chip());
-        String[] quick = prefs.quickLangs();
-        for (int slot = 0; slot < 4; slot++) {
-            int sel = 0;
-            for (int j = 0; j < Langs.ALL.length; j++) if (Langs.ALL[j].id.equals(quick[slot])) sel = j + 1;
-            final int s = slot;
-            root.addView(spinner(choices, sel, i -> prefs.quickLang(s, i == 0 ? "" : Langs.ALL[i - 1].id)));
-        }
+        LinearLayout tr = card(root, "🌐", "Translation languages", "Your quick tiles in the 文A menu — up to 4");
+        langSlots = new LinearLayout(this);
+        langSlots.setOrientation(LinearLayout.VERTICAL);
+        tr.addView(langSlots);
+        buildSlots();
+        tr.addView(note("Every other language stays one tap away under “More languages”."));
 
         // ── bubble
-        root.addView(header("Bubble"));
-        root.addView(toggle("Only show while the keyboard is open", prefs.onlyWithKeyboard(), v -> { prefs.onlyWithKeyboard(v); FlowService.reload(); }));
-        root.addView(toggle("Large bubble", prefs.largeBubble(), v -> { prefs.largeBubble(v); FlowService.reload(); }));
-        root.addView(toggle("Vibrate on tap", prefs.haptics(), prefs::haptics));
-        root.addView(button("Reset bubble position", v -> { prefs.resetBubble(); FlowService.reload(); }));
+        LinearLayout bub = card(root, "🫧", "Bubble", "Look and behaviour");
+        bub.addView(toggle("Only while typing", "Show the bubble only when the keyboard is open", prefs.onlyWithKeyboard(), BLUE,
+                v -> { prefs.onlyWithKeyboard(v); FlowService.reload(); }));
+        bub.addView(toggle("Large bubble", "Bigger buttons, easier to hit", prefs.largeBubble(), BLUE,
+                v -> { prefs.largeBubble(v); FlowService.reload(); }));
+        bub.addView(toggle("Vibrate on tap", null, prefs.haptics(), BLUE, prefs::haptics));
+        LinearLayout r = hrow();
+        r.setPadding(0, dp(6), 0, 0);
+        r.addView(pill("Reset bubble position", false, v -> { prefs.resetBubble(); FlowService.reload(); toast("Bubble moved back to the right edge"); }));
+        bub.addView(r);
 
         // ── try it
-        root.addView(header("Try it"));
-        EditText tryIt = new EditText(this);
-        tryIt.setHint("Tap here, then tap the bubble and talk");
+        LinearLayout tryCard = card(root, "✍️", "Try it", "Tap the box, then use the bubble");
+        EditText tryIt = field("Say something…", "", false);
         tryIt.setMinLines(3);
-        root.addView(tryIt);
-        root.addView(note("Version " + versionName()));
+        tryIt.setGravity(Gravity.TOP | Gravity.START);
+        tryCard.addView(tryIt);
+
+        TextView ver = note("FreeFlow Bubble v" + versionName());
+        ver.setGravity(Gravity.CENTER);
+        ver.setPadding(0, dp(20), 0, 0);
+        root.addView(ver);
     }
 
     @Override
@@ -140,43 +132,211 @@ public class MainActivity extends Activity {
         buildChecklist();
     }
 
-    // ───────── checklist ─────────
+    // ───────── hero ─────────
+
+    private View hero() {
+        LinearLayout h = new LinearLayout(this);
+        h.setOrientation(LinearLayout.VERTICAL);
+        h.setPadding(dp(20), dp(22), dp(20), dp(20));
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, BLUE});
+        g.setCornerRadius(dp(26));
+        h.setBackground(g);
+
+        LinearLayout top = hrow();
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.mipmap.ic_launcher);
+        icon.setClipToOutline(true);
+        GradientDrawable round = new GradientDrawable();
+        round.setCornerRadius(dp(14));
+        icon.setBackground(round);
+        top.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.setPadding(dp(14), 0, 0, 0);
+        titles.addView(text("FreeFlow Bubble", 24, true, TEXT));
+        titles.addView(text("Talk instead of type — in any app", 14, false, 0xDDFFFFFF));
+        top.addView(titles);
+        h.addView(top);
+
+        LinearLayout legend = new LinearLayout(this);
+        legend.setOrientation(LinearLayout.VERTICAL);
+        legend.setPadding(0, dp(16), 0, 0);
+        legend.addView(legendRow(PINK, "✨", "Improve your text by voice"));
+        legend.addView(legendRow(0xFF404050, "文A", "Translate what you typed"));
+        legend.addView(legendRow(0xFF5B5BFF, "🎙", "Tap to talk · hold to push-to-talk"));
+        h.addView(legend);
+        return h;
+    }
+
+    private View legendRow(int color, String glyph, String what) {
+        LinearLayout r = hrow();
+        r.setPadding(0, dp(5), 0, dp(5));
+        TextView dot = text(glyph, 14, true, TEXT);
+        dot.setGravity(Gravity.CENTER);
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(color);
+        g.setStroke(dp(2), 0x55FFFFFF);
+        dot.setBackground(g);
+        r.addView(dot, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        TextView l = text(what, 15, false, TEXT);
+        l.setPadding(dp(12), 0, 0, 0);
+        r.addView(l);
+        return r;
+    }
+
+    // ───────── setup checklist ─────────
 
     private void buildChecklist() {
+        if (checklist == null) return;
         checklist.removeAllViews();
         boolean a11y = accessibilityOn();
         boolean micOk = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
         boolean notifOk = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
-        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        boolean battery = pm.isIgnoringBatteryOptimizations(getPackageName());
+        boolean battery = ((PowerManager) getSystemService(POWER_SERVICE)).isIgnoringBatteryOptimizations(getPackageName());
+        boolean keyOk = !prefs.groqKey().isEmpty();
 
-        checklist.addView(step(micOk, "1. Allow the microphone", "Grant", v ->
-                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1)));
-        checklist.addView(step(notifOk, "2. Allow notifications", "Grant", v -> {
+        checklist.addView(step(micOk, "Microphone", "Grant", v -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1)));
+        checklist.addView(step(notifOk, "Notifications", "Grant", v -> {
             if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2);
         }));
-        checklist.addView(step(a11y, "3. Turn on FreeFlow Bubble in Accessibility", "Open", v ->
-                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))));
+        checklist.addView(step(a11y, "Turn on FreeFlow Bubble in Accessibility", "Open",
+                v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))));
         if (!a11y) {
-            checklist.addView(note("Switch greyed out (“Restricted setting”)? Android does this for apps installed outside the Play Store. "
-                    + "Tap “App info” below → ⋮ (top right) → “Allow restricted settings”, then try again."));
-            checklist.addView(button("App info", v -> appInfo()));
+            checklist.addView(note("Switch greyed out (“Restricted setting”)? Tap App info → ⋮ (top right) → “Allow restricted settings”, then try again."));
+            LinearLayout r = hrow();
+            r.addView(pill("App info", false, v -> appInfo()));
+            checklist.addView(r);
         }
-        checklist.addView(step(battery, "4. Let it run in the background", "Allow", v -> {
+        checklist.addView(step(battery, "Run in the background", "Allow", v -> {
             try {
                 startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName())));
             } catch (Exception e) { appInfo(); }
         }));
         if ("samsung".equalsIgnoreCase(Build.MANUFACTURER)) {
-            checklist.addView(step(false, "5. Samsung: add to “Never sleeping apps”", "Open", v -> openSamsungBattery()));
-            checklist.addView(note("Settings → Battery → Background usage limits → Never sleeping apps → + → FreeFlow Bubble. "
-                    + "This stops One UI from switching the bubble off after a few days."));
+            checklist.addView(step(false, "Samsung: “Never sleeping apps”", "Open", v -> openSamsungBattery()));
+            checklist.addView(note("Battery → Background usage limits → Never sleeping apps → + → FreeFlow Bubble. Stops One UI switching the bubble off."));
         }
-        if (micOk && a11y && battery && !prefs.groqKey().isEmpty())
-            checklist.addView(note("✅ All set — tap the box under “Try it” and the bubble appears."));
-        else if (prefs.groqKey().isEmpty())
-            checklist.addView(note("Then paste your Groq key below."));
+        checklist.addView(step(keyOk, "Groq key added", null, null));
+        if (micOk && a11y && battery && keyOk) {
+            TextView done = text("✅  All set — tap the box in “Try it” and the bubble appears.", 14, true, GREEN);
+            done.setPadding(0, dp(8), 0, 0);
+            checklist.addView(done);
+        }
     }
+
+    private View step(boolean done, String title, String action, View.OnClickListener l) {
+        LinearLayout r = hrow();
+        r.setPadding(dp(12), dp(10), dp(10), dp(10));
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(14));
+        g.setColor(done ? 0x2230C759 : 0x22FF9F0A);
+        g.setStroke(dp(1), done ? 0x5530C759 : 0x55FF9F0A);
+        r.setBackground(g);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.bottomMargin = dp(8);
+        r.setLayoutParams(lp);
+        TextView badge = text(done ? "✓" : "!", 14, true, done ? GREEN : ORANGE);
+        badge.setGravity(Gravity.CENTER);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setColor(done ? 0x3330C759 : 0x33FF9F0A);
+        badge.setBackground(bg);
+        r.addView(badge, new LinearLayout.LayoutParams(dp(26), dp(26)));
+        TextView t = text(title, 15, false, done ? MUTED : TEXT);
+        t.setPadding(dp(12), 0, dp(8), 0);
+        r.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        if (!done && action != null) r.addView(pill(action, true, l));
+        return r;
+    }
+
+    // ───────── spoken language chips ─────────
+
+    private void buildSpoken() {
+        spokenChips.removeAllViews();
+        String cur = prefs.spokenLanguage();
+        for (String[] l : Langs.SPOKEN) {
+            boolean on = l[0].equals(cur);
+            TextView chip = chip(l[1], on);
+            chip.setOnClickListener(v -> { prefs.spokenLanguage(l[0]); buildSpoken(); });
+            spokenChips.addView(chip);
+        }
+    }
+
+    // ───────── translation slots ─────────
+
+    private void buildSlots() {
+        langSlots.removeAllViews();
+        String[] q = prefs.quickLangs();
+        for (int i = 0; i < 4; i++) {
+            final int slot = i;
+            Langs.Lang l = Langs.byId(q[i]);
+            if (l == null) {
+                TextView add = text("+  Add a language", 15, true, 0xFFB9A6FF);
+                add.setGravity(Gravity.CENTER);
+                add.setPadding(0, dp(16), 0, dp(16));
+                GradientDrawable g = new GradientDrawable();
+                g.setCornerRadius(dp(16));
+                g.setColor(0x0FFFFFFF);
+                g.setStroke(dp(2), 0x557C4DFF, dp(8), dp(6));
+                add.setBackground(g);
+                add.setOnClickListener(v -> pickLanguage(slot));
+                langSlots.addView(add, slotLp());
+                continue;
+            }
+            LinearLayout row = hrow();
+            row.setPadding(dp(14), dp(12), dp(10), dp(12));
+            GradientDrawable g = new GradientDrawable();
+            g.setCornerRadius(dp(16));
+            g.setColor(CARD2);
+            g.setStroke(dp(1), LINE);
+            row.setBackground(g);
+            row.addView(text(l.flag, 30, false, TEXT));
+            LinearLayout names = new LinearLayout(this);
+            names.setOrientation(LinearLayout.VERTICAL);
+            names.setPadding(dp(14), 0, dp(6), 0);
+            int paren = l.label.indexOf(" (");
+            names.addView(text(paren > 0 ? l.label.substring(0, paren) : l.label, 17, true, TEXT));
+            if (paren > 0) names.addView(text(l.label.substring(paren + 2, l.label.length() - 1), 13, false, MUTED));
+            row.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
+            row.addView(pill("Change", false, v -> pickLanguage(slot)));
+            TextView x = text("✕", 16, true, MUTED);
+            x.setPadding(dp(12), dp(6), dp(6), dp(6));
+            x.setOnClickListener(v -> { prefs.quickLang(slot, ""); compactSlots(); buildSlots(); });
+            row.addView(x);
+            langSlots.addView(row, slotLp());
+        }
+    }
+
+    /** Keep filled slots at the top after a change. */
+    private void compactSlots() {
+        String[] q = prefs.quickLangs();
+        int w = 0;
+        for (String id : q) if (Langs.byId(id) != null) prefs.quickLang(w++, id);
+        for (; w < 4; w++) prefs.quickLang(w, "");
+    }
+
+    private LinearLayout.LayoutParams slotLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.bottomMargin = dp(8);
+        return lp;
+    }
+
+    private void pickLanguage(int slot) {
+        String[] items = new String[Langs.ALL.length];
+        for (int i = 0; i < items.length; i++) items[i] = Langs.ALL[i].flag + "   " + Langs.ALL[i].label;
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Translate to…")
+                .setItems(items, (d, which) -> {
+                    prefs.quickLang(slot, Langs.ALL[which].id);
+                    compactSlots();
+                    buildSlots();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    // ───────── misc actions ─────────
 
     private boolean accessibilityOn() {
         if (FlowService.instance != null) return true;
@@ -202,7 +362,7 @@ public class MainActivity extends Activity {
     }
 
     private void testKey() {
-        Toast.makeText(this, "Testing…", Toast.LENGTH_SHORT).show();
+        toast("Testing…");
         new Thread(() -> {
             String msg;
             try {
@@ -222,9 +382,8 @@ public class MainActivity extends Activity {
         buildChecklist();
     }
 
-    // ───────── tiny UI kit ─────────
+    // ───────── UI kit ─────────
 
-    private interface IntCb { void on(int i); }
     private interface BoolCb { void on(boolean b); }
     private interface StrCb { void on(String s); }
 
@@ -238,86 +397,156 @@ public class MainActivity extends Activity {
 
     private int dp(float v) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()); }
 
-    private TextView header(String t) {
-        TextView v = new TextView(this);
-        v.setText(t);
-        v.setTextSize(19);
-        v.setTypeface(Typeface.DEFAULT_BOLD);
-        v.setPadding(0, dp(26), 0, dp(6));
-        return v;
+    private TextView text(String s, float size, boolean bold, int color) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(size);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        return t;
     }
 
-    private TextView label(String t) {
-        TextView v = new TextView(this);
-        v.setText(t);
-        v.setTextSize(15);
-        v.setPadding(0, dp(6), 0, dp(2));
-        return v;
+    private TextView label(String s) {
+        TextView t = text(s, 13, true, MUTED);
+        t.setAllCaps(true);
+        t.setLetterSpacing(0.06f);
+        t.setPadding(0, dp(4), 0, dp(8));
+        return t;
     }
 
-    private TextView note(String t) {
-        TextView v = new TextView(this);
-        v.setText(t);
-        v.setTextSize(13);
-        v.setAlpha(0.7f);
-        v.setPadding(0, dp(2), 0, dp(8));
-        return v;
+    private TextView note(String s) {
+        TextView t = text(s, 13, false, MUTED);
+        t.setPadding(0, dp(6), 0, dp(6));
+        return t;
     }
 
-    private LinearLayout row() {
+    private LinearLayout hrow() {
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.HORIZONTAL);
         r.setGravity(Gravity.CENTER_VERTICAL);
         return r;
     }
 
-    private Button button(String t, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(t);
-        b.setAllCaps(false);
-        b.setOnClickListener(l);
-        return b;
+    private HorizontalScrollView scroll(View content) {
+        HorizontalScrollView h = new HorizontalScrollView(this);
+        h.setHorizontalScrollBarEnabled(false);
+        h.addView(content);
+        return h;
     }
 
-    private View step(boolean done, String text, String action, View.OnClickListener l) {
-        LinearLayout r = row();
-        r.setPadding(dp(12), dp(8), dp(8), dp(8));
+    /** A card with an emoji badge, title and subtitle; returns the body to add content to. */
+    private LinearLayout card(LinearLayout parent, String emoji, String title, String subtitle) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(16), dp(16), dp(16), dp(14));
         GradientDrawable g = new GradientDrawable();
-        g.setCornerRadius(dp(12));
-        g.setColor(done ? Color.argb(40, 48, 199, 89) : Color.argb(40, 255, 159, 10));
-        r.setBackground(g);
-        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        rp.bottomMargin = dp(8);
-        r.setLayoutParams(rp);
-        TextView t = new TextView(this);
-        t.setText((done ? "✅  " : "⬜  ") + text);
-        t.setTextSize(15);
-        r.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        if (!done) r.addView(button(action, l));
+        g.setCornerRadius(dp(22));
+        g.setColor(CARD);
+        g.setStroke(dp(1), LINE);
+        c.setBackground(g);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(14);
+        parent.addView(c, lp);
+
+        LinearLayout head = hrow();
+        head.setPadding(0, 0, 0, dp(12));
+        TextView badge = text(emoji, 18, false, TEXT);
+        badge.setGravity(Gravity.CENTER);
+        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0x557C4DFF, 0x55286EFF});
+        bg.setCornerRadius(dp(12));
+        badge.setBackground(bg);
+        head.addView(badge, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.setPadding(dp(12), 0, 0, 0);
+        titles.addView(text(title, 18, true, TEXT));
+        if (subtitle != null) titles.addView(text(subtitle, 13, false, MUTED));
+        head.addView(titles);
+        c.addView(head);
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        c.addView(body);
+        return body;
+    }
+
+    private TextView pill(String label, boolean primary, View.OnClickListener l) {
+        TextView p = text(label, 14, true, TEXT);
+        p.setGravity(Gravity.CENTER);
+        p.setPadding(dp(16), dp(9), dp(16), dp(9));
+        GradientDrawable g = primary
+                ? new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE, BLUE})
+                : new GradientDrawable();
+        if (!primary) { g.setColor(CARD2); g.setStroke(dp(1), 0x33FFFFFF); }
+        g.setCornerRadius(dp(20));
+        p.setBackground(g);
+        p.setOnClickListener(l);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.rightMargin = dp(8);
+        p.setLayoutParams(lp);
+        return p;
+    }
+
+    private TextView chip(String label, boolean on) {
+        TextView c = text(label, 14, on, on ? TEXT : 0xFFCFCFE0);
+        c.setPadding(dp(14), dp(8), dp(14), dp(8));
+        GradientDrawable g = on
+                ? new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE, BLUE})
+                : new GradientDrawable();
+        if (!on) { g.setColor(CARD2); g.setStroke(dp(1), 0x22FFFFFF); }
+        g.setCornerRadius(dp(18));
+        c.setBackground(g);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.rightMargin = dp(8);
+        c.setLayoutParams(lp);
+        return c;
+    }
+
+    private EditText field(String hint, String value, boolean secret) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setText(value);
+        e.setTextColor(TEXT);
+        e.setHintTextColor(0xFF6A6A80);
+        e.setTextSize(15);
+        e.setPadding(dp(14), dp(12), dp(14), dp(12));
+        if (secret) {
+            e.setSingleLine(true);
+            e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        }
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(14));
+        g.setColor(0xFF12121A);
+        g.setStroke(dp(1), 0x33FFFFFF);
+        e.setBackground(g);
+        e.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+        return e;
+    }
+
+    private View toggle(String title, String sub, boolean value, int accent, BoolCb cb) {
+        LinearLayout r = hrow();
+        r.setPadding(0, dp(10), 0, dp(10));
+        LinearLayout t = new LinearLayout(this);
+        t.setOrientation(LinearLayout.VERTICAL);
+        t.addView(text(title, 16, true, TEXT));
+        if (sub != null) {
+            TextView s = text(sub, 13, false, MUTED);
+            s.setPadding(0, dp(2), dp(10), 0);
+            t.addView(s);
+        }
+        r.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        Switch sw = new Switch(this);
+        sw.setChecked(value);
+        int[][] states = {{android.R.attr.state_checked}, {}};
+        sw.setThumbTintList(new ColorStateList(states, new int[]{Color.WHITE, 0xFFB0B0C0}));
+        sw.setTrackTintList(new ColorStateList(states, new int[]{accent, 0xFF3A3A4A}));
+        sw.setOnCheckedChangeListener((v, on) -> cb.on(on));
+        r.addView(sw);
+        r.setOnClickListener(v -> sw.toggle());
         return r;
     }
 
-    private Switch toggle(String t, boolean value, BoolCb cb) {
-        Switch s = new Switch(this);
-        s.setText(t);
-        s.setTextSize(15);
-        s.setChecked(value);
-        s.setPadding(0, dp(8), 0, dp(8));
-        s.setOnCheckedChangeListener((v, on) -> cb.on(on));
-        return s;
-    }
-
-    private Spinner spinner(List<String> items, int selected, IntCb cb) {
-        Spinner sp = new Spinner(this);
-        ArrayAdapter<String> a = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, items);
-        sp.setAdapter(a);
-        sp.setSelection(selected, false);
-        sp.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) { cb.on(pos); }
-            @Override public void onNothingSelected(AdapterView<?> p) { }
-        });
-        return sp;
-    }
+    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
 
     private void open(String url) {
         try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception ignored) { }

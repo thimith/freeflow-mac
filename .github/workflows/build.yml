@@ -32,12 +32,14 @@ jobs:
         run: '[ -x vendor/bin/whisper-server ] || ./scripts/build-whisper.sh'
 
       - name: Build app and DMG
-        run: ./make-dmg.sh
+        run: |
+          ./make-dmg.sh
+          cp build/FreeFlow.dmg "build/FreeFlow-v1.0.${{ github.run_number }}.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
           name: FreeFlow-dmg
-          path: build/FreeFlow.dmg
+          path: build/FreeFlow-v*.dmg
           retention-days: 30
 
       - name: Publish release
@@ -45,7 +47,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v1.0.${{ github.run_number }}"
-          gh release create "$TAG" build/FreeFlow.dmg \
+          gh release create "$TAG" "build/FreeFlow-$TAG.dmg" \
             --title "FreeFlow for Mac $TAG" \
             --latest \
             --notes "Drag FreeFlow to Applications, open it, and if macOS warns about the developer use System Settings → Privacy & Security → Open Anyway. Apple Silicon (M1 or newer), macOS 14+."

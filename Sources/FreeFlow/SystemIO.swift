@@ -59,11 +59,31 @@ struct AppContext {
 // MARK: - Putting text into the focused app
 
 enum TextInserter {
-    static func insert(_ text: String) {
+    enum Result { case inserted, copiedOnly(String) }
+
+    /// Inserts into the focused app. If macOS won't let us send keystrokes (Accessibility missing or
+    /// stale after an update) or no other app is focused, the text is left on the clipboard instead.
+    @discardableResult
+    static func insert(_ text: String) -> Result {
+        if !AXIsProcessTrusted() {
+            copyOnly(text)
+            return .copiedOnly("Copied — re-enable Accessibility to auto-paste")
+        }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            copyOnly(text)
+            return .copiedOnly("Copied — click into another app's text field")
+        }
         switch Prefs.insertMethod {
         case .paste: paste(text)
         case .type: typeText(text)
         }
+        return .inserted
+    }
+
+    static func copyOnly(_ text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
     }
 
     static func paste(_ text: String) {

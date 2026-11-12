@@ -440,13 +440,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
            let last = t.last, !last.isWhitespace {
             t += " "
         }
-        TextInserter.insert(t)
+        let result = TextInserter.insert(t)
         lastText = t
         HistoryStore.shared.add(HistoryEntry(date: Date(), text: text, raw: raw, app: ctx.appName,
                                              mode: mode.rawValue, seconds: duration,
                                              sttSeconds: sttTime, aiSeconds: aiTime))
         finishIdle()
-        overlay.set(.done(String(format: "%.1fs", sttTime + aiTime)))
+        switch result {
+        case .inserted:
+            overlay.set(.done(String(format: "%.1fs", sttTime + aiTime)))
+        case .copiedOnly(let why):
+            Feedback.error()
+            overlay.flash(why)
+            if !AXIsProcessTrusted() { openSettings() }
+        }
     }
 
     private func pasteLast() {
@@ -454,6 +461,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             overlay.flash("Nothing dictated yet")
             return
         }
-        TextInserter.insert(t)
+        if case .copiedOnly(let why) = TextInserter.insert(t) { overlay.flash(why) }
     }
 }

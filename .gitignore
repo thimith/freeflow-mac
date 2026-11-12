@@ -8,3 +8,10 @@ windows/publish/
 windows/out/
 windows/FreeFlow/bin/
 windows/FreeFlow/obj/
+android/.gradle/
+android/build/
+android/app/build/
+android/*.apk
+android/app/ci-signing/
+android/app/signing.properties
+android/app/*.p12

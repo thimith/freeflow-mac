@@ -1,0 +1,40 @@
+plugins { id 'com.android.application' }
+
+def signing = new Properties()
+def sf = file('signing.properties')
+if (sf.exists()) sf.withInputStream { signing.load(it) }
+
+android {
+    namespace 'com.freeflow.bubble'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.freeflow.bubble'
+        minSdk 29
+        targetSdk 35
+        versionCode (System.getenv('FF_CODE') ?: '1') as int
+        versionName System.getenv('FF_VERSION') ?: '1.0.0'
+    }
+
+    signingConfigs {
+        release {
+            storeFile file(signing['storeFile'] ?: 'freeflow-release.p12')
+            storeType 'pkcs12'
+            storePassword signing['storePassword']
+            keyAlias signing['keyAlias']
+            keyPassword signing['keyPassword']
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

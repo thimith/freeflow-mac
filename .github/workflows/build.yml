@@ -3,7 +3,7 @@ name: Build FreeFlow.dmg
 on:
   push:
     branches: [main]
-    paths-ignore: ['windows/**', '.github/workflows/windows.yml']
+    paths-ignore: ['windows/**', 'android/**', '.github/workflows/windows.yml', '.github/workflows/android.yml']
   workflow_dispatch:
 
 jobs:

@@ -20,8 +20,28 @@ public final class TextTarget {
     public String text() {
         node.refresh();
         if (node.isShowingHintText()) return "";
-        CharSequence t = node.getText();
-        return t == null ? "" : t.toString();
+        CharSequence cs = node.getText();
+        if (cs == null) return "";
+        String t = cs.toString();
+        // Many apps (WhatsApp, Instagram…) report their grey placeholder as the text of an empty box.
+        CharSequence hint = node.getHintText();
+        if (hint != null && t.contentEquals(hint)) return "";
+        if (node.getTextSelectionStart() <= 0 && isPlaceholder(t)) return "";
+        return t;
+    }
+
+    private static final String[] PLACEHOLDERS = {
+            "message", "messages", "mensaje", "mensagem", "type a message", "write a message", "send a message",
+            "escribe un mensaje", "escribir un mensaje", "écrire un message", "votre message", "message…", "mensaje…",
+            "add a comment", "add a comment…", "agrega un comentario…", "search", "buscar", "rechercher",
+            "type here", "enter text", "reply", "responder", "répondre", "text message", "rcs message", "sms",
+            "mensaje de texto", "chat", "aa"};
+
+    private static boolean isPlaceholder(String t) {
+        String l = t.trim().toLowerCase();
+        if (l.isEmpty()) return true;
+        for (String p : PLACEHOLDERS) if (l.equals(p)) return true;
+        return false;
     }
 
     public int[] selection(String cur) {

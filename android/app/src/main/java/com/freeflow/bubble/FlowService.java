@@ -150,13 +150,20 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
         bubble.setGravity(Gravity.CENTER_HORIZONTAL);
-        bubble.setPadding(dp(4), dp(4), dp(4), dp(4));
+        bubble.setPadding(dp(5), dp(6), dp(5), dp(6));
         bubble.setClipChildren(false);
         bubble.setClipToPadding(false);
+        // One solid capsule holding both buttons, with a light rim so it stands out on dark and light apps.
+        GradientDrawable capsule = new GradientDrawable();
+        capsule.setColor(Color.argb(240, 18, 18, 24));
+        capsule.setCornerRadius(dp(40));
+        capsule.setStroke(dp(2), Color.argb(110, 255, 255, 255));
+        bubble.setBackground(capsule);
+        bubble.setElevation(dp(12));
 
         tr = new BubbleButton(this, BubbleButton.Kind.TRANSLATE);
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(small, small);
-        tlp.bottomMargin = dp(10);
+        tlp.bottomMargin = dp(6);
         bubble.addView(tr, tlp);
 
         mic = new BubbleButton(this, BubbleButton.Kind.MIC);

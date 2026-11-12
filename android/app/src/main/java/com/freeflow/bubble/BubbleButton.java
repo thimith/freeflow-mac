@@ -37,7 +37,7 @@ public class BubbleButton extends View {
         text.setColor(Color.WHITE);
         text.setTextAlign(Paint.Align.CENTER);
         text.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-        setElevation(6 * dp);
+        setElevation(2 * dp);
     }
 
     public void setState(State s) {
@@ -75,7 +75,7 @@ public class BubbleButton extends View {
             default:
                 if (kind == Kind.MIC)
                     fill.setShader(new LinearGradient(0, 0, w, h, Color.rgb(124, 77, 255), Color.rgb(40, 110, 255), Shader.TileMode.CLAMP));
-                else { fill.setShader(null); fill.setColor(Color.rgb(32, 32, 38)); }
+                else { fill.setShader(null); fill.setColor(Color.rgb(64, 64, 80)); }
         }
         c.drawCircle(cx, cy, br, fill);
         fill.setShader(null);

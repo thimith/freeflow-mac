@@ -61,10 +61,16 @@ abstract class LayeredWindow : Form
         return value + velocity;
     }
 
-    protected static float EaseOutBack(float t)
+    protected static float EaseInOut(float t)
     {
-        const float c1 = 1.70158f, c3 = c1 + 1;
-        return 1 + c3 * MathF.Pow(t - 1, 3) + c1 * MathF.Pow(t - 1, 2);
+        t = Math.Clamp(t, 0, 1);
+        return t < 0.5f ? 4 * t * t * t : 1 - MathF.Pow(-2 * t + 2, 3) / 2;
+    }
+
+    protected static float EaseOut(float t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        return 1 - MathF.Pow(1 - t, 3);
     }
 
     protected float S => DeviceDpi / 96f;
@@ -87,7 +93,8 @@ abstract class LayeredWindow : Form
             g.CompositingQuality = CompositingQuality.HighQuality;
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.Clear(Color.Transparent);
-            Render(g, bounds.Size);
+            try { Render(g, bounds.Size); }
+            catch (Exception ex) { Program.Log(ex); }   // a drawing glitch must never break dictation
         }
         IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen), hbmp = IntPtr.Zero, old = IntPtr.Zero;
         try
@@ -114,6 +121,7 @@ abstract class LayeredWindow : Form
     protected static GraphicsPath Capsule(RectangleF r)
     {
         var p = new GraphicsPath();
+        if (r.Width < 1 || r.Height < 1) { p.AddRectangle(new RectangleF(r.X, r.Y, Math.Max(1, r.Width), Math.Max(1, r.Height))); return p; }
         float d = Math.Min(r.Width, r.Height);
         p.AddArc(r.X, r.Y, d, d, 90, 180);
         p.AddArc(r.Right - d, r.Y, d, d, 270, 180);
@@ -124,6 +132,8 @@ abstract class LayeredWindow : Form
     protected static GraphicsPath RoundRect(RectangleF r, float radius)
     {
         var p = new GraphicsPath();
+        if (r.Width < 1 || r.Height < 1) { p.AddRectangle(new RectangleF(r.X, r.Y, Math.Max(1, r.Width), Math.Max(1, r.Height))); return p; }
+        radius = Math.Min(radius, Math.Min(r.Width, r.Height) / 2);
         float d = Math.Max(1, radius * 2);
         p.AddArc(r.X, r.Y, d, d, 180, 90);
         p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
@@ -135,6 +145,7 @@ abstract class LayeredWindow : Form
 
     protected static void Circle(Graphics g, RectangleF r, Color a, Color b)
     {
+        if (r.Width < 1 || r.Height < 1) return;
         using var br = new LinearGradientBrush(r, a, b, LinearGradientMode.ForwardDiagonal);
         g.FillEllipse(br, r);
     }

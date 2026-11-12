@@ -45,8 +45,8 @@ sealed class TranslateBar : LayeredWindow
         hideTimer.Tick += (_, _) => HideBar();
         openTimer.Tick += (_, _) =>
         {
-            openT = Math.Min(1, openT + 0.075f);
-            WindowAlpha = (byte)(255 * Math.Min(1, openT * 1.8f));
+            openT = Math.Min(1, openT + 0.07f);
+            WindowAlpha = (byte)(255 * EaseOut(Math.Min(1, openT * 1.4f)));
             Redraw();
             if (openT >= 1) openTimer.Stop();
         };
@@ -223,9 +223,9 @@ sealed class TranslateBar : LayeredWindow
     {
         if (openT < 1)
         {
-            // spring up out of the bubble: scale from the bottom-centre with a slight overshoot
-            float e = EaseOutBack(openT);
-            float sc = 0.86f + 0.14f * e;
+            // ease up out of the bubble: grow from the bottom-centre, no overshoot
+            float e = EaseOut(openT);
+            float sc = 0.94f + 0.06f * e;
             bool above = anchor is { } a2 && Bounds.Bottom <= a2.Top + D(4);
             float oy = above ? size.Height : 0;
             g.TranslateTransform(size.Width / 2f, oy);

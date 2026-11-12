@@ -20,10 +20,13 @@ sealed class DockBar : LayeredWindow
     Point downScreen, downOrigin;
 
     // animation state
-    float curW = -1, velW;
-    float appear = 1, velAppear;
+    float curW = -1, tweenFrom, tweenTo = -1;
+    DateTime tweenStart;
+    const float TweenMs = 300;
+    float appear = 1;
     float level;
-    readonly float[] hov = new float[4], pressS = new float[4], pressV = new float[4];
+    readonly float[] hov = new float[4], pressS = new float[4];
+    int pressedId = -1;
     readonly System.Windows.Forms.Timer frame = new() { Interval = 16 };
     readonly System.Windows.Forms.Timer back = new();
 
@@ -106,7 +109,7 @@ sealed class DockBar : LayeredWindow
 
     void PopIn()
     {
-        appear = 0.6f; velAppear = 0;
+        appear = 0.9f;
         Show();
     }
 
@@ -121,13 +124,20 @@ sealed class DockBar : LayeredWindow
     void Tick()
     {
         float target = TargetWidth();
-        curW = Spring(curW, ref velW, target, 0.2f, 0.66f);
-        if (curW < target && velW < 0) { curW = target; velW = 0; }   // never bounce narrower than the buttons inside
-        appear = Spring(appear, ref velAppear, 1f, 0.2f, 0.62f);
+        if (Math.Abs(target - tweenTo) > 0.5f)
+        {
+            // new size: ease from wherever we are now to the new width
+            tweenFrom = curW < 0 ? target : curW;
+            tweenTo = target;
+            tweenStart = DateTime.Now;
+        }
+        float tw = (float)(DateTime.Now - tweenStart).TotalMilliseconds / TweenMs;
+        curW = tweenFrom + (tweenTo - tweenFrom) * EaseInOut(tw);
+        appear += (1f - appear) * 0.22f;
         for (int i = 0; i < 4; i++)
         {
-            hov[i] += ((hot == i ? 1f : 0f) - hov[i]) * 0.28f;
-            pressS[i] = Spring(pressS[i], ref pressV[i], 0f, 0.3f, 0.6f);
+            hov[i] += ((hot == i ? 1f : 0f) - hov[i]) * 0.22f;
+            pressS[i] += ((pressedId == i ? -0.07f : 0f) - pressS[i]) * 0.3f;
         }
         float lv;
         lock (levels) lv = levels[^1];
@@ -136,8 +146,8 @@ sealed class DockBar : LayeredWindow
 
         if (Visible) Redraw();
 
-        bool settled = Math.Abs(curW - target) < 0.4f && Math.Abs(velW) < 0.2f && Math.Abs(appear - 1) < 0.003f
-                       && hov.All(h => h < 0.01f || h > 0.99f) && pressS.All(v => Math.Abs(v) < 0.002f);
+        bool settled = tw >= 1 && Math.Abs(appear - 1) < 0.003f
+                       && hov.All(h => h < 0.01f || h > 0.99f) && pressS.All(v => Math.Abs(v) < 0.002f || pressedId >= 0);
         if (settled && !Recording && !Busy && !JustDone)
         {
             curW = target;
@@ -259,7 +269,8 @@ sealed class DockBar : LayeredWindow
     RectangleF Scaled(RectangleF r, int id, float extra = 0)
     {
         float fit = Fit(r);
-        float s = (1 + 0.08f * hov[id] + pressS[id] + extra) * (0.35f + 0.65f * fit) * (fit <= 0.02f ? 0 : 1);
+        float s = (1 + 0.06f * hov[id] + pressS[id] + extra) * (0.35f + 0.65f * EaseOut(fit));
+        if (fit <= 0.02f) return RectangleF.Empty;
         if (fit < 1)
         {
             // keep the shrunken element inside the capsule
@@ -313,14 +324,15 @@ sealed class DockBar : LayeredWindow
         if (JustDone)
         {
             float t = (float)(DateTime.Now - doneAt).TotalMilliseconds / 900f;
-            donePop = 0.10f * MathF.Sin(MathF.Min(1, t * 1.6f) * MathF.PI) * (1 - t * 0.4f);
+            donePop = 0.04f * EaseInOut(MathF.Min(1, t * 3)) * (1 - EaseInOut(t));
         }
         var micR = Scaled(mic, HitMic, donePop);
         if (Recording) Circle(g, micR, Color.FromArgb(255, 69, 58), Color.FromArgb(230, 40, 40));
         else if (Busy) Circle(g, micR, Color.FromArgb(70, 70, 88), Color.FromArgb(70, 70, 88));
         else if (JustDone) Circle(g, micR, Green, Color.FromArgb(30, 170, 80));
         else Circle(g, micR, Purple, Blue);
-        if (Recording)
+        if (micR.Width < 2) { }
+        else if (Recording)
         {
             float s = micR.Width * 0.30f;
             using var w = new SolidBrush(Color.White);
@@ -421,7 +433,7 @@ sealed class DockBar : LayeredWindow
         downScreen = Cursor.Position;
         downOrigin = Origin;
         downId = HitTest(e.Location);
-        if (downId >= 0) { pressS[downId] = -0.14f; pressV[downId] = 0; Kick(); }   // squish
+        if (downId >= 0) { pressedId = downId; Kick(); }   // gentle press-in
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -444,9 +456,10 @@ sealed class DockBar : LayeredWindow
     {
         if (!pressed) return;
         pressed = false;
+        pressedId = -1;
+        Kick();
         if (dragging) { dragging = false; Settings.Current.Save(); return; }
         int id = HitTest(e.Location);
-        if (id >= 0) { pressS[id] = 0.12f; pressV[id] = 0; Kick(); }   // bounce back past full size
         switch (id)
         {
             case HitMic: Mic?.Invoke(); break;

@@ -76,8 +76,8 @@ sealed class TrayApp : ApplicationContext
         overlay.Dock = dock;
         dock.Mic = ToggleHandsFree;
         dock.Cancel = Cancel;
-        dock.Translate = () => translateBar.ShowMenuNear(dock.Bounds);
-        dock.Recent = () => translateBar.ShowRecentNear(dock.Bounds);
+        dock.Translate = () => translateBar.ShowMenuNear(() => dock.CapsuleBounds);
+        dock.Recent = () => translateBar.ShowRecentNear(() => dock.CapsuleBounds);
         dock.CardOpen = () => translateBar.CardOpen;
         dock.ShowDock();
         Settings.Changed += () => { if (Settings.Current.ShowDock) dock.ShowDock(); else dock.Hide(); };

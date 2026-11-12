@@ -49,6 +49,24 @@ abstract class LayeredWindow : Form
         base.WndProc(ref m);
     }
 
+    /// Whole-window opacity (for fade-in animations).
+    protected byte WindowAlpha = 255;
+
+    // ───────── animation helpers ─────────
+
+    /// Critically-underdamped spring: returns the new value, updates velocity. Gives a light, bouncy overshoot.
+    protected static float Spring(float value, ref float velocity, float target, float stiffness = 0.22f, float damping = 0.68f)
+    {
+        velocity = (velocity + (target - value) * stiffness) * damping;
+        return value + velocity;
+    }
+
+    protected static float EaseOutBack(float t)
+    {
+        const float c1 = 1.70158f, c3 = c1 + 1;
+        return 1 + c3 * MathF.Pow(t - 1, 3) + c1 * MathF.Pow(t - 1, 2);
+    }
+
     protected float S => DeviceDpi / 96f;
     protected int D(float v) => (int)Math.Round(v * S);
 
@@ -77,7 +95,7 @@ abstract class LayeredWindow : Form
             var size = new SIZE { W = bounds.Width, H = bounds.Height };
             var src = new POINT();
             var dst = new POINT { X = bounds.X, Y = bounds.Y };
-            var blend = new BLENDFUNCTION { Op = 0, Flags = 0, Alpha = 255, Format = 1 /*AC_SRC_ALPHA*/ };
+            var blend = new BLENDFUNCTION { Op = 0, Flags = 0, Alpha = WindowAlpha, Format = 1 /*AC_SRC_ALPHA*/ };
             UpdateLayeredWindow(Handle, screen, ref dst, ref size, mem, ref src, 0, ref blend, 2 /*ULW_ALPHA*/);
         }
         finally

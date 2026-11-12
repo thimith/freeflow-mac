@@ -10,7 +10,10 @@ sealed class TranslateBar : LayeredWindow
 
     enum Mode { Menu, All, Recent }
     Mode mode;
-    Rectangle? anchor;
+    Func<Rectangle> anchorFn;
+    Rectangle? anchor => anchorFn?.Invoke();
+    float openT = 1;   // 0 → 1 open animation
+    readonly System.Windows.Forms.Timer openTimer = new() { Interval = 16 };
     int hot = -1, scroll, copiedIndex = -1;
 
     sealed class Item
@@ -40,6 +43,13 @@ sealed class TranslateBar : LayeredWindow
     public TranslateBar()
     {
         hideTimer.Tick += (_, _) => HideBar();
+        openTimer.Tick += (_, _) =>
+        {
+            openT = Math.Min(1, openT + 0.075f);
+            WindowAlpha = (byte)(255 * Math.Min(1, openT * 1.8f));
+            Redraw();
+            if (openT >= 1) openTimer.Stop();
+        };
         copiedTimer.Tick += (_, _) => { copiedTimer.Stop(); copiedIndex = -1; Redraw(); };
         outsideTimer.Tick += (_, _) =>
         {
@@ -53,12 +63,13 @@ sealed class TranslateBar : LayeredWindow
 
     public bool CardOpen => Visible;
 
-    public void ShowMenu() { anchor = null; Open(Mode.Menu); }
-    public void ShowMenuNear(Rectangle bubble) { anchor = bubble; Open(Mode.Menu); }
-    public void ShowRecentNear(Rectangle bubble) { anchor = bubble; Open(Mode.Recent); }
+    public void ShowMenu() { anchorFn = null; Open(Mode.Menu); }
+    public void ShowMenuNear(Func<Rectangle> bubble) { anchorFn = bubble; Open(Mode.Menu); }
+    public void ShowRecentNear(Func<Rectangle> bubble) { anchorFn = bubble; Open(Mode.Recent); }
 
     public void HideBar()
     {
+        openTimer.Stop();
         hideTimer.Stop();
         outsideTimer.Stop();
         Hide();
@@ -66,12 +77,16 @@ sealed class TranslateBar : LayeredWindow
 
     void Open(Mode m)
     {
+        bool switching = Visible;
         mode = m;
         scroll = 0;
         hot = -1;
         copiedIndex = -1;
+        openT = switching ? 0.55f : 0f;   // pop open (a smaller hop when switching cards)
+        WindowAlpha = switching ? (byte)255 : (byte)0;
         Redraw();
         if (!Visible) Show();
+        openTimer.Start();
         hideTimer.Stop();
         if (m == Mode.Menu) { hideTimer.Interval = 20000; hideTimer.Start(); }
         if (m == Mode.All) { hideTimer.Interval = 45000; hideTimer.Start(); }
@@ -185,10 +200,11 @@ sealed class TranslateBar : LayeredWindow
         int x, y;
         if (anchor is { } a)
         {
+            // centred directly above the bubble (below it only if there's no room above)
             wa = Screen.FromRectangle(a).WorkingArea;
-            x = Math.Clamp(a.Right - size.Width, wa.Left, wa.Right - size.Width);
-            y = a.Top - size.Height - D(10);
-            if (y < wa.Top) y = Math.Min(a.Bottom + D(10), wa.Bottom - size.Height);
+            x = Math.Clamp(a.Left + a.Width / 2 - size.Width / 2, wa.Left, wa.Right - size.Width);
+            y = a.Top - size.Height - D(12);
+            if (y < wa.Top) y = Math.Min(a.Bottom + D(12), wa.Bottom - size.Height);
         }
         else
         {
@@ -205,6 +221,17 @@ sealed class TranslateBar : LayeredWindow
 
     protected override void Render(Graphics g, Size size)
     {
+        if (openT < 1)
+        {
+            // spring up out of the bubble: scale from the bottom-centre with a slight overshoot
+            float e = EaseOutBack(openT);
+            float sc = 0.86f + 0.14f * e;
+            bool above = anchor is { } a2 && Bounds.Bottom <= a2.Top + D(4);
+            float oy = above ? size.Height : 0;
+            g.TranslateTransform(size.Width / 2f, oy);
+            g.ScaleTransform(sc, sc);
+            g.TranslateTransform(-size.Width / 2f, -oy + (1 - e) * D(10) * (above ? 1 : -1));
+        }
         var card = new RectangleF(D(1), D(1), size.Width - D(2) - 1, size.Height - D(2) - 1);
         using (var path = RoundRect(card, D(16)))
         {

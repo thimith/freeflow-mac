@@ -8,6 +8,8 @@ on:
 jobs:
   dmg:
     runs-on: macos-15
+    permissions:
+      contents: write
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +38,13 @@ jobs:
           name: FreeFlow-dmg
           path: build/FreeFlow.dmg
           retention-days: 30
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          gh release create "$TAG" build/FreeFlow.dmg \
+            --title "FreeFlow for Mac $TAG" \
+            --latest \
+            --notes "Drag FreeFlow to Applications, open it, and if macOS warns about the developer use System Settings → Privacy & Security → Open Anyway. Apple Silicon (M1 or newer), macOS 14+."

@@ -149,8 +149,17 @@ enum TextInserter {
         return value as? String
     }
 
+    /// Text to translate / improve: the selection if there is one, otherwise the whole text box (⌘A, which stays selected
+    /// so the result replaces it).
+    static func selectionOrWholeField() -> String? {
+        if let s = selectedText(), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return s }
+        sendKey(0, flags: .maskCommand)   // ⌘A
+        RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+        return copySelection()
+    }
+
     /// Fallback for apps without accessibility text support (Electron, browsers): ⌘C and read the clipboard.
-    private static func copySelection() -> String? {
+    static func copySelection() -> String? {
         let pb = NSPasteboard.general
         let saved = snapshot(pb)
         let before = pb.changeCount

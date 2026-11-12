@@ -27,6 +27,8 @@ struct GeneralTab: View {
     @AppStorage(K.trigger) private var trigger: TriggerKey = .fn
     @AppStorage(K.toggleCombo) private var toggle: KeyCombo = .optionSpace
     @AppStorage(K.pasteCombo) private var pasteCombo: KeyCombo = .controlCommandV
+    @AppStorage(K.translateCombo) private var translateCombo: KeyCombo = .controlOptionT
+    @AppStorage(K.translateAfterDictation) private var translateAfter = true
     @AppStorage(K.language) private var language = "auto"
     @AppStorage(K.translateTo) private var translateTo = ""
     @AppStorage(K.polish) private var polish: PolishProvider = .off
@@ -55,6 +57,10 @@ struct GeneralTab: View {
                 Picker("Paste last transcript", selection: $pasteCombo) {
                     ForEach(KeyCombo.pasteChoices) { Text($0.label).tag($0) }
                 }
+                Picker("Translate / improve text", selection: $translateCombo) {
+                    ForEach(KeyCombo.translateChoices) { Text($0.label).tag($0) }
+                }
+                Toggle("Show the 文A Translate button for 5 s after each dictation", isOn: $translateAfter)
             }
 
             Section("Language") {
@@ -269,6 +275,8 @@ struct AITab: View {
                 }
             }
 
+            TranslationSection()
+
             Section("Style") {
                 Toggle("Adapt to the app I'm typing in", isOn: $contextAware)
                 caption("Casual in Slack/WhatsApp/Messages, proper paragraphs in Mail/Gmail, literal in code editors and terminals.")
@@ -306,6 +314,29 @@ struct AITab: View {
                 testOutput = "⚠️ " + error.localizedDescription
             }
             testing = false
+        }
+    }
+}
+
+// MARK: - Translation languages
+
+struct TranslationSection: View {
+    @AppStorage(K.quickLangs) private var raw = "es-CO,en-US,fr-FR,"
+    @AppStorage(K.groqKey) private var groqKey = ""
+
+    var body: some View {
+        Section("Translation & improve by voice") {
+            SecureField("Groq API key", text: $groqKey)
+            ForEach(0..<4, id: \.self) { slot in
+                Picker("Quick language \(slot + 1)", selection: Binding(
+                    get: { Prefs.quickLangs[slot] },
+                    set: { Prefs.setQuickLang(slot, $0); raw = Prefs.str(K.quickLangs) })) {
+                    Text("— none —").tag("")
+                    ForEach(TLang.all) { Text("\($0.flag)  \($0.label)").tag($0.id) }
+                }
+            }
+            caption("These are the tiles in the 文A card; every other language is under “More languages”. "
+                    + "Translation and ✨ Improve by voice use this Groq key — the same one as Voice and AI Polish.")
         }
     }
 }

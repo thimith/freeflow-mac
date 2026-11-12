@@ -78,9 +78,7 @@ enum LLM {
         case .ollama:
             return try await chat(base: Prefs.ollamaURL, key: "", model: Prefs.ollamaModel, system: system, user: user)
         case .groq:
-            guard !Prefs.groqKey.isEmpty else { throw FFError.message("Add your free Groq API key in Settings") }
-            return try await chat(base: "https://api.groq.com/openai/v1", key: Prefs.groqKey,
-                                  model: Prefs.groqLLMModel, system: system, user: user)
+            return try await GroqChat.complete(system: system, user: user)
         case .custom:
             return try await chat(base: Prefs.customBase, key: Prefs.customKey,
                                   model: Prefs.customLLMModel, system: system, user: user)
@@ -115,6 +113,67 @@ enum LLM {
             throw FFError.message("Unexpected AI response")
         }
         return content
+    }
+}
+
+// MARK: - Groq with automatic model fallback (Groq retires models regularly)
+
+enum GroqChat {
+    static let base = "https://api.groq.com/openai/v1"
+    static let preferred = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct",
+                            "meta-llama/llama-4-maverick-17b-128e-instruct", "openai/gpt-oss-20b",
+                            "meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant", "qwen/qwen3-32b"]
+
+    static func complete(system: String, user: String) async throws -> String {
+        guard !Prefs.groqKey.isEmpty else { throw FFError.message("Add your free Groq API key in Settings → AI Polish") }
+        do {
+            return try await LLM.chat(base: base, key: Prefs.groqKey, model: Prefs.groqLLMModel, system: system, user: user)
+        } catch let e as FFError where modelGone(e) {
+            let m = try await pickModel()
+            Prefs.d.set(m, forKey: K.groqLLMModel)
+            return try await LLM.chat(base: base, key: Prefs.groqKey, model: m, system: system, user: user)
+        }
+    }
+
+    static func modelGone(_ e: FFError) -> Bool {
+        let m = (e.errorDescription ?? "").lowercased()
+        return m.contains("http 404") || m.contains("decommissioned") || m.contains("model_not_found") || m.contains("does not exist")
+    }
+
+    static func pickModel() async throws -> String {
+        var req = URLRequest(url: URL(string: base + "/models")!)
+        req.setValue("Bearer \(Prefs.groqKey)", forHTTPHeaderField: "Authorization")
+        let data = try await HTTP.send(req)
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let ids = (obj?["data"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+        if let m = preferred.first(where: { ids.contains($0) }) { return m }
+        if let m = ids.first(where: { id in
+            let l = id.lowercased()
+            return !["whisper", "tts", "guard", "orpheus", "playai", "compound"].contains(where: { l.contains($0) })
+        }) { return m }
+        throw FFError.message("Groq has no chat model available right now")
+    }
+}
+
+// MARK: - Translation
+
+enum Translator {
+    static func translate(_ text: String, to lang: TLang) async throws -> String {
+        let system = "You are a professional translator. Translate the user's text into \(lang.prompt). "
+            + "Sound like a native speaker writing a natural message: keep the meaning, tone, level of formality, "
+            + "emojis, names, line breaks and formatting. If part of the text is already in the target language, keep it. "
+            + "Output ONLY the translation — no quotes, notes, or explanations."
+        let out: String
+        if !Prefs.groqKey.isEmpty {
+            out = try await GroqChat.complete(system: system, user: text)
+        } else if Prefs.polishProvider != .off {
+            out = try await LLM.complete(system: system, user: text)
+        } else {
+            throw FFError.message("Add your Groq API key in Settings → AI Polish to translate")
+        }
+        let t = TextCleanup.sanitizeLLM(out, raw: text)
+        guard !t.isEmpty else { throw FFError.message("The translation came back empty") }
+        return t
     }
 }
 
@@ -230,8 +289,8 @@ enum Polisher {
 
     /// Command mode: transform the selected text, or generate text from a spoken request.
     static func command(instruction: String, selection: String?, context: AppContext) async throws -> String {
-        guard Prefs.polishProvider != .off else {
-            throw FFError.message("Command mode needs an AI — Settings → AI Polish")
+        guard Prefs.polishProvider != .off || !Prefs.groqKey.isEmpty else {
+            throw FFError.message("Improve-by-voice needs an AI — add your Groq key in Settings → AI Polish")
         }
         let system = commandSystem(selection: selection, context: context)
         let user: String
@@ -240,7 +299,12 @@ enum Polisher {
         } else {
             user = instruction
         }
-        let out = try await LLM.complete(system: system, user: user)
+        let out: String
+        if Prefs.polishProvider == .off {
+            out = try await GroqChat.complete(system: system, user: user)
+        } else {
+            out = try await LLM.complete(system: system, user: user)
+        }
         let cleaned = TextCleanup.sanitizeLLM(out, raw: instruction)
         guard !cleaned.isEmpty else { throw FFError.message("The AI returned nothing") }
         return cleaned

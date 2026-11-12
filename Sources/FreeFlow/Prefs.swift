@@ -23,7 +23,7 @@ enum TriggerKey: String, CaseIterable, Identifiable {
 }
 
 enum KeyCombo: String, CaseIterable, Identifiable {
-    case none, optionSpace, controlOptionSpace, commandShiftSpace, controlCommandV, optionShiftV, controlOptionV
+    case none, optionSpace, controlOptionSpace, commandShiftSpace, controlCommandV, optionShiftV, controlOptionV, controlOptionT, optionShiftT
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -34,6 +34,8 @@ enum KeyCombo: String, CaseIterable, Identifiable {
         case .controlCommandV: return "⌃⌘ V"
         case .optionShiftV: return "⌥⇧ V"
         case .controlOptionV: return "⌃⌥ V"
+        case .controlOptionT: return "⌃⌥ T"
+        case .optionShiftT: return "⌥⇧ T"
         }
     }
     var keyCode: UInt32 {
@@ -41,6 +43,7 @@ enum KeyCombo: String, CaseIterable, Identifiable {
         case .none: return 0
         case .optionSpace, .controlOptionSpace, .commandShiftSpace: return UInt32(kVK_Space)
         case .controlCommandV, .optionShiftV, .controlOptionV: return UInt32(kVK_ANSI_V)
+        case .controlOptionT, .optionShiftT: return UInt32(kVK_ANSI_T)
         }
     }
     var modifiers: UInt32 {
@@ -52,10 +55,13 @@ enum KeyCombo: String, CaseIterable, Identifiable {
         case .controlCommandV: return UInt32(controlKey | cmdKey)
         case .optionShiftV: return UInt32(optionKey | shiftKey)
         case .controlOptionV: return UInt32(controlKey | optionKey)
+        case .controlOptionT: return UInt32(controlKey | optionKey)
+        case .optionShiftT: return UInt32(optionKey | shiftKey)
         }
     }
     static let toggleChoices: [KeyCombo] = [.none, .optionSpace, .controlOptionSpace, .commandShiftSpace]
     static let pasteChoices: [KeyCombo] = [.none, .controlCommandV, .optionShiftV, .controlOptionV]
+    static let translateChoices: [KeyCombo] = [.none, .controlOptionT, .optionShiftT]
 }
 
 enum TranscriptionProvider: String, CaseIterable, Identifiable {
@@ -123,6 +129,9 @@ enum K {
     static let showOverlay = "showOverlay"
     static let silenceDetection = "silenceDetection"
     static let didFirstLaunch = "didFirstLaunch"
+    static let quickLangs = "quickLangs"
+    static let translateCombo = "translateCombo"
+    static let translateAfterDictation = "translateAfterDictation"
 }
 
 // MARK: - Typed accessors
@@ -160,6 +169,9 @@ enum Prefs {
             K.trailingSpace: true,
             K.showOverlay: true,
             K.silenceDetection: true,
+            K.quickLangs: "es-CO,en-US,fr-FR,",
+            K.translateCombo: KeyCombo.controlOptionT.rawValue,
+            K.translateAfterDictation: true,
         ])
     }
 
@@ -193,6 +205,61 @@ enum Prefs {
     static var trailingSpace: Bool { d.bool(forKey: K.trailingSpace) }
     static var showOverlay: Bool { d.bool(forKey: K.showOverlay) }
     static var silenceDetection: Bool { d.bool(forKey: K.silenceDetection) }
+    static var translateCombo: KeyCombo { KeyCombo(rawValue: str(K.translateCombo)) ?? .none }
+    static var translateAfterDictation: Bool { d.bool(forKey: K.translateAfterDictation) }
+
+    /// Four quick translation slots ("" = empty).
+    static var quickLangs: [String] {
+        var parts = str(K.quickLangs).components(separatedBy: ",")
+        while parts.count < 4 { parts.append("") }
+        return Array(parts.prefix(4))
+    }
+    static func setQuickLang(_ slot: Int, _ id: String) {
+        var q = quickLangs
+        q[slot] = id
+        let filled = q.filter { !$0.isEmpty }   // keep filled slots first
+        d.set((filled + Array(repeating: "", count: 4 - filled.count)).joined(separator: ","), forKey: K.quickLangs)
+    }
+}
+
+// MARK: - Translation targets (same list and regional varieties as the Android bubble)
+
+struct TLang: Identifiable, Hashable {
+    let id: String, flag: String, label: String, prompt: String
+    var short: String { label.components(separatedBy: " (").first ?? label }
+
+    static let all: [TLang] = [
+        TLang(id: "es-CO", flag: "🇨🇴", label: "Español (Colombia)", prompt: "Colombian Spanish, with the natural everyday words and expressions people use in Colombia (paisa/Medellín register when informal)"),
+        TLang(id: "es-419", flag: "🌎", label: "Español (Latinoamérica)", prompt: "neutral Latin American Spanish"),
+        TLang(id: "es-MX", flag: "🇲🇽", label: "Español (México)", prompt: "Mexican Spanish with natural Mexican expressions"),
+        TLang(id: "es-AR", flag: "🇦🇷", label: "Español (Argentina)", prompt: "Rioplatense (Argentine) Spanish using voseo (vos)"),
+        TLang(id: "es-ES", flag: "🇪🇸", label: "Español (España)", prompt: "Peninsular Spanish from Spain, using vosotros"),
+        TLang(id: "en-US", flag: "🇺🇸", label: "English (US)", prompt: "American English"),
+        TLang(id: "en-GB", flag: "🇬🇧", label: "English (UK)", prompt: "British English with British spelling"),
+        TLang(id: "fr-FR", flag: "🇫🇷", label: "Français (France)", prompt: "French as spoken in France"),
+        TLang(id: "fr-CA", flag: "🇨🇦", label: "Français (Québec)", prompt: "Québécois French with natural Québec expressions"),
+        TLang(id: "pt-BR", flag: "🇧🇷", label: "Português (Brasil)", prompt: "Brazilian Portuguese"),
+        TLang(id: "pt-PT", flag: "🇵🇹", label: "Português (Portugal)", prompt: "European Portuguese"),
+        TLang(id: "de", flag: "🇩🇪", label: "Deutsch", prompt: "German"),
+        TLang(id: "it", flag: "🇮🇹", label: "Italiano", prompt: "Italian"),
+        TLang(id: "nl", flag: "🇳🇱", label: "Nederlands", prompt: "Dutch"),
+        TLang(id: "zh", flag: "🇨🇳", label: "中文", prompt: "Simplified Chinese"),
+        TLang(id: "ja", flag: "🇯🇵", label: "日本語", prompt: "Japanese"),
+        TLang(id: "ko", flag: "🇰🇷", label: "한국어", prompt: "Korean"),
+        TLang(id: "ar", flag: "🇸🇦", label: "العربية", prompt: "Modern Standard Arabic"),
+        TLang(id: "hi", flag: "🇮🇳", label: "हिन्दी", prompt: "Hindi"),
+        TLang(id: "ru", flag: "🇷🇺", label: "Русский", prompt: "Russian"),
+        TLang(id: "tr", flag: "🇹🇷", label: "Türkçe", prompt: "Turkish"),
+        TLang(id: "pl", flag: "🇵🇱", label: "Polski", prompt: "Polish"),
+        TLang(id: "id", flag: "🇮🇩", label: "Indonesia", prompt: "Indonesian"),
+        TLang(id: "vi", flag: "🇻🇳", label: "Tiếng Việt", prompt: "Vietnamese"),
+        TLang(id: "th", flag: "🇹🇭", label: "ไทย", prompt: "Thai"),
+        TLang(id: "sv", flag: "🇸🇪", label: "Svenska", prompt: "Swedish"),
+        TLang(id: "uk", flag: "🇺🇦", label: "Українська", prompt: "Ukrainian"),
+    ]
+
+    static func byID(_ id: String) -> TLang? { all.first { $0.id == id } }
+    static var quick: [TLang] { Prefs.quickLangs.compactMap { byID($0) } }
 }
 
 // MARK: - Languages

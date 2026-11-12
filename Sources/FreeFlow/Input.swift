@@ -12,12 +12,13 @@ final class HotkeyMonitor {
     var onEscape: (() -> Void)?
     var onToggle: (() -> Void)?
     var onPasteLast: (() -> Void)?
+    var onTranslate: (() -> Void)?
 
     private var monitors: [Any] = []
     private var triggerIsDown = false
     private var hotKeyRefs: [EventHotKeyRef] = []
     private var handlerInstalled = false
-    private var registered: (KeyCombo, KeyCombo)?
+    private var registered: (KeyCombo, KeyCombo, KeyCombo)?
     private var defaultsObserver: NSObjectProtocol?
 
     func start() {
@@ -97,12 +98,12 @@ final class HotkeyMonitor {
     // MARK: Carbon hotkeys (consume the keystroke, no Accessibility needed)
 
     func registerHotkeys() {
-        let t = Prefs.toggleCombo, p = Prefs.pasteCombo
-        if let r = registered, r.0 == t, r.1 == p { return }
+        let t = Prefs.toggleCombo, p = Prefs.pasteCombo, x = Prefs.translateCombo
+        if let r = registered, r.0 == t, r.1 == p, r.2 == x { return }
         for ref in hotKeyRefs { UnregisterEventHotKey(ref) }
         hotKeyRefs.removeAll()
         installHandler()
-        for (combo, id) in [(t, UInt32(1)), (p, UInt32(2))] where combo != .none {
+        for (combo, id) in [(t, UInt32(1)), (p, UInt32(2)), (x, UInt32(3))] where combo != .none {
             var ref: EventHotKeyRef?
             let hkID = EventHotKeyID(signature: OSType(0x4646_4C57), id: id)
             if RegisterEventHotKey(combo.keyCode, combo.modifiers, hkID, GetApplicationEventTarget(), 0, &ref) == noErr,
@@ -110,7 +111,7 @@ final class HotkeyMonitor {
                 hotKeyRefs.append(ref)
             }
         }
-        registered = (t, p)
+        registered = (t, p, x)
     }
 
     private func installHandler() {
@@ -125,7 +126,9 @@ final class HotkeyMonitor {
                               nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
             let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(userData).takeUnretainedValue()
             DispatchQueue.main.async {
-                if hk.id == 1 { monitor.onToggle?() } else if hk.id == 2 { monitor.onPasteLast?() }
+                if hk.id == 1 { monitor.onToggle?() }
+                else if hk.id == 2 { monitor.onPasteLast?() }
+                else if hk.id == 3 { monitor.onTranslate?() }
             }
             return noErr
         }, 1, &spec, me, nil)

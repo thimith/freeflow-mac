@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let recorder = AudioRecorder()
     private let overlay = OverlayController()
     private let media = MediaController()
+    private let translateBar = TranslateBar()
 
     private var state: RecState = .idle
     private var mode: DictationMode = .dictation
@@ -74,6 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkeys.onEscape = { [weak self] in self?.cancel() }
         hotkeys.onToggle = { [weak self] in self?.toggleHandsFree() }
         hotkeys.onPasteLast = { [weak self] in self?.pasteLast() }
+        hotkeys.onTranslate = { [weak self] in self?.translateBar.showMenu() }
+        translateBar.onTranslate = { [weak self] lang in self?.runTranslate(lang) }
+        translateBar.onImprove = { [weak self] in self?.improveByVoice() }
         hotkeys.start()
 
         recorder.onLevel = { [weak self] level in self?.overlay.model.push(level: level) }
@@ -274,6 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func cancel() {
+        if translateBar.isVisible { translateBar.hide(); return }
         switch state {
         case .pushToTalk, .pendingTap, .handsFree:
             cancelRecording(silently: false)
@@ -449,10 +454,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch result {
         case .inserted:
             overlay.set(.done(String(format: "%.1fs", sttTime + aiTime)))
+            if mode == .dictation && Prefs.translateAfterDictation {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    guard let self, self.state == .idle else { return }
+                    self.overlay.hide()
+                    self.translateBar.showCompact()
+                }
+            }
         case .copiedOnly(let why):
             Feedback.error()
             overlay.flash(why)
             if !AXIsProcessTrusted() { openSettings() }
+        }
+    }
+
+    // MARK: Translate & improve by voice
+
+    private func runTranslate(_ lang: TLang) {
+        guard state == .idle else { return }
+        guard AXIsProcessTrusted() else {
+            overlay.flash("Allow Accessibility in Settings → Permissions")
+            return
+        }
+        guard let text = TextInserter.selectionOrWholeField(),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            overlay.flash("Nothing to translate — click into a text box first")
+            return
+        }
+        state = .processing
+        setIcon("ellipsis.circle")
+        overlay.show(.translating)
+        let t0 = Date()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let out = try await Translator.translate(text, to: lang)
+                self.finishIdle()
+                if case .copiedOnly(let why) = TextInserter.insert(out) { self.overlay.flash(why); return }
+                self.lastText = out
+                self.overlay.set(.done("\(lang.flag) " + String(format: "%.1fs", Date().timeIntervalSince(t0))))
+            } catch {
+                self.finishIdle()
+                Feedback.error()
+                self.overlay.flash(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Hands-free Command mode on the selection — or the whole text box if nothing is selected.
+    private func improveByVoice() {
+        guard state == .idle else { return }
+        if (TextInserter.selectedText() ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            TextInserter.sendKey(0, flags: .maskCommand)   // ⌘A so the result replaces the whole box
+            RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+        }
+        mode = .command
+        if startRecording(as: .handsFree) {
+            announce()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, self.state == .handsFree else { return }
+                self.overlay.flash("Say how to improve it, then tap \(Prefs.triggerKey.short) to finish")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) { [weak self] in
+                    guard let self, self.state == .handsFree else { return }
+                    self.overlay.show(.command)
+                }
+            }
         }
     }
 

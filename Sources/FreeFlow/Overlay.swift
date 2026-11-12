@@ -3,7 +3,7 @@ import SwiftUI
 
 final class OverlayModel: ObservableObject {
     enum Phase: Equatable {
-        case listening, handsFree, command, transcribing, polishing, thinking, done(String), message(String)
+        case listening, handsFree, command, transcribing, polishing, thinking, translating, done(String), message(String)
         var isRecording: Bool { self == .listening || self == .handsFree || self == .command }
     }
     static let barCount = 26
@@ -127,7 +127,7 @@ struct OverlayView: View {
             Image(systemName: "lock.fill").font(.system(size: 10, weight: .bold)).foregroundColor(.orange)
         case .command:
             Image(systemName: "sparkles").foregroundColor(Color(red: 0.75, green: 0.6, blue: 1))
-        case .transcribing, .polishing, .thinking:
+        case .transcribing, .polishing, .thinking, .translating:
             ProgressView().progressViewStyle(.circular).controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
         case .done:
             Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
@@ -149,6 +149,7 @@ struct OverlayView: View {
         case .transcribing: Text("Transcribing…")
         case .polishing: Text("Polishing…")
         case .thinking: Text("Thinking…")
+        case .translating: Text("Translating…")
         case .done(let t): Text("Inserted · \(t)")
         case .message(let m): Text(m).lineLimit(1).frame(maxWidth: 280)
         }

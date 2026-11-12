@@ -133,6 +133,8 @@ public enum AppCategory { Email, Chat, Code, Terminal, Document, Other }
 public sealed class FocusContext
 {
     public string AppName = "", Process = "", Title = "";
+    /// Text just before the cursor when dictating into the middle of a sentence (null otherwise).
+    public string ContinuesAfter;
     public AppCategory Category = AppCategory.Other;
     public static readonly FocusContext Empty = new();
 
@@ -299,6 +301,9 @@ static class Polisher
         if (words.Count > 0) sb.Append($"\nAlways spell these names/terms exactly like this: {string.Join(", ", words)}.");
         if (s.ContextAware && !string.IsNullOrEmpty(c.AppName)) sb.Append($"\nContext: the text will be inserted into {c.AppName}. {StyleHint(c)}");
         if (!string.IsNullOrWhiteSpace(s.CustomInstructions)) sb.Append($"\nAdditional instructions from the user: {s.CustomInstructions.Trim()}");
+        if (!string.IsNullOrEmpty(c.ContinuesAfter))
+            sb.Append($"\nThe text is inserted in the middle of a sentence, right after: “…{c.ContinuesAfter.Trim()}”. Continue it naturally: " +
+                      "do not capitalize the first word unless it's a proper noun or “I”, and don't repeat what's already written.");
         return sb.ToString();
     }
 

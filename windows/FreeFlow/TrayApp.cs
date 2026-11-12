@@ -15,6 +15,7 @@ sealed class TrayApp : ApplicationContext
     readonly TranslateBar translateBar = new();
     readonly DockBar dock = new();
     string preSelection;
+    Task<CaretContext.Around> caretTask;
     readonly System.Windows.Forms.Timer tapTimer = new() { Interval = 350 };
     readonly System.Windows.Forms.Timer announceTimer = new() { Interval = 150 };
     readonly System.Windows.Forms.Timer maxTimer = new() { Interval = 600_000 };
@@ -186,6 +187,7 @@ sealed class TrayApp : ApplicationContext
             return false;
         }
         state = newState;
+        caretTask = CaretContext.CaptureAsync();   // what's around the cursor (mid-sentence?)
         dock.SetState(DockBar.DockState.Recording);
         Llm.WarmUp();
         announceTimer.Start();   // skip sounds/UI for accidental taps or Ctrl+Win shortcuts
@@ -258,6 +260,14 @@ sealed class TrayApp : ApplicationContext
             ct.ThrowIfCancellationRequested();
             if (raw.Length == 0) { FinishIdle(); overlay.Flash("No speech detected"); return; }
 
+            CaretContext.Around around = null;
+            if (!mode && caretTask != null)
+            {
+                var done = await Task.WhenAny(caretTask, Task.Delay(300));
+                if (done == caretTask) around = caretTask.Result;
+            }
+            if (CaretContext.MidSentence(around)) ctx.ContinuesAfter = around.Before;
+
             var t1 = DateTime.Now;
             bool usedAi = false;
             string output;
@@ -276,6 +286,7 @@ sealed class TrayApp : ApplicationContext
             }
             else output = Snippets.ExpandInline(Cleanup.Basic(raw));
             output = Vocabulary.Apply(output);
+            if (!mode) output = CaretContext.Fit(output, around);
             ct.ThrowIfCancellationRequested();
             var ai = usedAi ? (DateTime.Now - t1).TotalSeconds : 0;
 

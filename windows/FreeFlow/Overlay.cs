@@ -2,7 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace FreeFlow;
 
-public enum Phase { Listening, HandsFree, Command, Transcribing, Polishing, Thinking, Done, Message }
+public enum Phase { Listening, HandsFree, Command, Transcribing, Polishing, Thinking, Translating, Done, Message }
 
 /// The floating pill at the bottom of the screen. Never takes focus, click-through.
 sealed class Overlay : Form
@@ -89,6 +89,7 @@ sealed class Overlay : Form
         Phase.Transcribing => "Transcribing…",
         Phase.Polishing => "Polishing…",
         Phase.Thinking => "Thinking…",
+        Phase.Translating => "Translating…",
         Phase.Done => string.IsNullOrEmpty(text) ? "Inserted" : $"Inserted · {text}",
         Phase.Message => text,
         _ => "",
@@ -141,6 +142,7 @@ sealed class Overlay : Form
             case Phase.Transcribing:
             case Phase.Polishing:
             case Phase.Thinking:
+            case Phase.Translating:
                 using (var pen = new Pen(Color.White, 2 * s))
                     g.DrawArc(pen, x - 6 * s, cy - 6 * s, 12 * s, 12 * s, (spin * 24) % 360, 270);
                 break;

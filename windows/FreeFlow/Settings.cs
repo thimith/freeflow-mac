@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace FreeFlow;
 
 public enum TriggerKey { CtrlWin, RightCtrl, RightAlt, CapsLock }
-public enum Combo { None, CtrlAltSpace, CtrlShiftSpace, AltShiftSpace, CtrlAltV, CtrlShiftV, AltShiftV }
+public enum Combo { None, CtrlAltSpace, CtrlShiftSpace, AltShiftSpace, CtrlAltV, CtrlShiftV, AltShiftV, CtrlAltT, AltShiftT }
 public enum SttProvider { LocalWhisper, Groq, Custom }
 public enum AiProvider { Off, Ollama, Groq, Custom }
 public enum InsertMethod { Paste, Type }
@@ -36,6 +36,8 @@ public static class Labels
         Combo.CtrlAltV => "Ctrl + Alt + V",
         Combo.CtrlShiftV => "Ctrl + Shift + V",
         Combo.AltShiftV => "Alt + Shift + V",
+        Combo.CtrlAltT => "Ctrl + Alt + T",
+        Combo.AltShiftT => "Alt + Shift + T",
         _ => c.ToString(),
     };
     public static string Of(SttProvider p) => p switch
@@ -67,11 +69,14 @@ public static class Labels
             Combo.CtrlAltV => (CTRL | ALT, 0x56),
             Combo.CtrlShiftV => (CTRL | SHIFT, 0x56),
             Combo.AltShiftV => (ALT | SHIFT, 0x56),
+            Combo.CtrlAltT => (CTRL | ALT, 0x54),
+            Combo.AltShiftT => (ALT | SHIFT, 0x54),
             _ => (0, 0),
         };
     }
     public static readonly Combo[] ToggleChoices = { Combo.None, Combo.CtrlAltSpace, Combo.CtrlShiftSpace, Combo.AltShiftSpace };
     public static readonly Combo[] PasteChoices = { Combo.None, Combo.CtrlAltV, Combo.CtrlShiftV, Combo.AltShiftV };
+    public static readonly Combo[] TranslateChoices = { Combo.None, Combo.CtrlAltT, Combo.AltShiftT };
 }
 
 public sealed class Settings
@@ -105,6 +110,9 @@ public sealed class Settings
     public bool ShowOverlay { get; set; } = true;
     public bool SilenceDetection { get; set; } = true;
     public int MicDevice { get; set; } = -1;   // -1 = Windows default
+    public Combo TranslateCombo { get; set; } = Combo.CtrlAltT;
+    public bool TranslateAfterDictation { get; set; } = true;
+    public string[] QuickLangs { get; set; } = { "es-CO", "en-US", "fr-FR", "" };
 
     [JsonIgnore] public static bool IsFirstRun { get; private set; }
     [JsonIgnore] public static Settings Current { get; } = Load();
@@ -156,6 +164,51 @@ public static class Paths
 }
 
 public record Lang(string Code, string Name, string English);
+
+/// Translation targets with regional varieties (same list as the Android bubble and the Mac app).
+public record TLang(string Id, string Flag, string Label, string Prompt)
+{
+    public string Short => Label.Contains(" (") ? Label[..Label.IndexOf(" (")] : Label;
+
+    public static readonly TLang[] All =
+    {
+        new("es-CO", "🇨🇴", "Español (Colombia)", "Colombian Spanish, with the natural everyday words and expressions people use in Colombia (paisa/Medellín register when informal)"),
+        new("es-419", "🌎", "Español (Latinoamérica)", "neutral Latin American Spanish"),
+        new("es-MX", "🇲🇽", "Español (México)", "Mexican Spanish with natural Mexican expressions"),
+        new("es-AR", "🇦🇷", "Español (Argentina)", "Rioplatense (Argentine) Spanish using voseo (vos)"),
+        new("es-ES", "🇪🇸", "Español (España)", "Peninsular Spanish from Spain, using vosotros"),
+        new("en-US", "🇺🇸", "English (US)", "American English"),
+        new("en-GB", "🇬🇧", "English (UK)", "British English with British spelling"),
+        new("fr-FR", "🇫🇷", "Français (France)", "French as spoken in France"),
+        new("fr-CA", "🇨🇦", "Français (Québec)", "Québécois French with natural Québec expressions"),
+        new("pt-BR", "🇧🇷", "Português (Brasil)", "Brazilian Portuguese"),
+        new("pt-PT", "🇵🇹", "Português (Portugal)", "European Portuguese"),
+        new("de", "🇩🇪", "Deutsch", "German"),
+        new("it", "🇮🇹", "Italiano", "Italian"),
+        new("nl", "🇳🇱", "Nederlands", "Dutch"),
+        new("zh", "🇨🇳", "中文", "Simplified Chinese"),
+        new("ja", "🇯🇵", "日本語", "Japanese"),
+        new("ko", "🇰🇷", "한국어", "Korean"),
+        new("ar", "🇸🇦", "العربية", "Modern Standard Arabic"),
+        new("hi", "🇮🇳", "हिन्दी", "Hindi"),
+        new("ru", "🇷🇺", "Русский", "Russian"),
+        new("tr", "🇹🇷", "Türkçe", "Turkish"),
+        new("pl", "🇵🇱", "Polski", "Polish"),
+        new("id", "🇮🇩", "Indonesia", "Indonesian"),
+        new("vi", "🇻🇳", "Tiếng Việt", "Vietnamese"),
+        new("th", "🇹🇭", "ไทย", "Thai"),
+        new("sv", "🇸🇪", "Svenska", "Swedish"),
+        new("uk", "🇺🇦", "Українська", "Ukrainian"),
+    };
+
+    public static TLang ById(string id) => All.FirstOrDefault(l => l.Id == id);
+
+    public static List<TLang> Quick()
+    {
+        var q = Settings.Current.QuickLangs ?? Array.Empty<string>();
+        return q.Select(ById).Where(l => l != null).ToList();
+    }
+}
 
 public static class Languages
 {

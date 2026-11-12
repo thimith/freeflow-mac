@@ -12,6 +12,8 @@ sealed class TrayApp : ApplicationContext
     readonly Recorder recorder = new();
     readonly Overlay overlay = new();
     readonly MediaMuter muter = new();
+    readonly TranslateBar translateBar = new();
+    string preSelection;
     readonly System.Windows.Forms.Timer tapTimer = new() { Interval = 350 };
     readonly System.Windows.Forms.Timer announceTimer = new() { Interval = 150 };
     readonly System.Windows.Forms.Timer maxTimer = new() { Interval = 600_000 };
@@ -59,6 +61,9 @@ sealed class TrayApp : ApplicationContext
         hook.Install();
         hotkeys.Toggle = ToggleHandsFree;
         hotkeys.PasteLast = PasteLast;
+        hotkeys.Translate = () => translateBar.ShowMenu();
+        translateBar.OnTranslate = RunTranslate;
+        translateBar.OnImprove = ImproveByVoice;
 
         recorder.Level = overlay.PushLevel;
         tapTimer.Tick += (_, _) => { tapTimer.Stop(); if (state == RecState.PendingTap) CancelRecording(silently: true); };
@@ -134,6 +139,7 @@ sealed class TrayApp : ApplicationContext
 
     void Cancel()
     {
+        if (translateBar.Visible) { translateBar.HideBar(); return; }
         switch (state)
         {
             case RecState.PushToTalk:
@@ -221,7 +227,8 @@ sealed class TrayApp : ApplicationContext
         cts = new CancellationTokenSource();
         var ct = cts.Token;
         // Command mode: grab the selection now — all keys are released, so Ctrl+C is clean.
-        string selection = mode ? Inserter.CopySelection() : null;
+        string selection = mode ? (preSelection ?? Inserter.CopySelection()) : null;
+        preSelection = null;
 
         var t0 = DateTime.Now;
         try
@@ -279,8 +286,78 @@ sealed class TrayApp : ApplicationContext
             Seconds = duration, SttSeconds = stt, AiSeconds = ai,
         });
         FinishIdle();
-        if (ok) overlay.Set(Phase.Done, $"{stt + ai:0.0}s");
+        if (ok)
+        {
+            overlay.Set(Phase.Done, $"{stt + ai:0.0}s");
+            if (!command && Settings.Current.TranslateAfterDictation)
+            {
+                var t2 = new System.Windows.Forms.Timer { Interval = 1000 };
+                t2.Tick += (_, _) =>
+                {
+                    t2.Stop(); t2.Dispose();
+                    if (state != RecState.Idle) return;
+                    overlay.HidePill();
+                    translateBar.ShowCompact();
+                };
+                t2.Start();
+            }
+        }
         else { Feedback.Error(); overlay.Flash(why); }
+    }
+
+    // ───────── translate & improve by voice ─────────
+
+    async void RunTranslate(TLang lang)
+    {
+        if (state != RecState.Idle) return;
+        var text = Inserter.SelectionOrWholeField();
+        if (string.IsNullOrWhiteSpace(text)) { overlay.Flash("Nothing to translate — click into a text box first"); return; }
+        state = RecState.Processing;
+        overlay.ShowPhase(Phase.Translating);
+        cts = new CancellationTokenSource();
+        var ct = cts.Token;
+        var t0 = DateTime.Now;
+        try
+        {
+            var outp = await Llm.Translate(text, lang, ct);
+            ct.ThrowIfCancellationRequested();
+            FinishIdle();
+            var (ok, why) = Inserter.Insert(outp);
+            lastText = outp;
+            if (ok) overlay.Set(Phase.Done, $"{lang.Flag} {(DateTime.Now - t0).TotalSeconds:0.0}s");
+            else overlay.Flash(why);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (ct.IsCancellationRequested) return;
+            FinishIdle();
+            Feedback.Error();
+            overlay.Flash(ex is FFException ? ex.Message : "Translation failed: " + ex.Message);
+            Program.Log(ex);
+        }
+    }
+
+    /// Hands-free Command mode on the selection — or the whole text box if nothing is selected.
+    void ImproveByVoice()
+    {
+        if (state != RecState.Idle) return;
+        preSelection = Inserter.CopySelection();
+        if (string.IsNullOrWhiteSpace(preSelection))
+        {
+            Inserter.SelectAll();
+            preSelection = Inserter.CopySelection();
+        }
+        commandMode = true;
+        if (StartRecording(RecState.HandsFree))
+        {
+            Announce();
+            overlay.Flash($"Say how to improve it, then tap {Labels.Short(Settings.Current.Trigger)} to finish");
+            var t = new System.Windows.Forms.Timer { Interval = 2600 };
+            t.Tick += (_, _) => { t.Stop(); t.Dispose(); if (state == RecState.HandsFree) overlay.ShowPhase(Phase.Command); };
+            t.Start();
+        }
+        else preSelection = null;
     }
 
     void PasteLast()

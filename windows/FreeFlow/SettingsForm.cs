@@ -117,6 +117,8 @@ sealed class SettingsForm : Form
                             "Add Shift while holding for Command mode: select text and say “make this friendlier”, or ask for anything with nothing selected. Esc cancels."));
         p.Controls.Add(Row("Start / stop hands-free", Pick(Labels.ToggleChoices, s.ToggleCombo, Labels.Of, v => s.ToggleCombo = v)));
         p.Controls.Add(Row("Paste last transcript", Pick(Labels.PasteChoices, s.PasteCombo, Labels.Of, v => s.PasteCombo = v)));
+        p.Controls.Add(Row("Translate / improve text", Pick(Labels.TranslateChoices, s.TranslateCombo, Labels.Of, v => s.TranslateCombo = v)));
+        p.Controls.Add(Check("Show the 文A Translate button for 5 s after each dictation", s.TranslateAfterDictation, v => s.TranslateAfterDictation = v));
 
         p.Controls.Add(Header("Microphone & language"));
         var mics = new List<int> { -1 };
@@ -288,6 +290,21 @@ sealed class SettingsForm : Form
         p.Controls.Add(Row("Provider", pick));
         p.Controls.AddRange(new[] { off, ollama, groq, custom });
         Sync();
+
+        p.Controls.Add(Header("Translation & improve by voice"));
+        p.Controls.Add(Row("Groq API key", Field(s.GroqKey, v => s.GroqKey = v, secret: true)));
+        var langs = new List<TLang> { null };
+        langs.AddRange(TLang.All);
+        for (int i = 0; i < 4; i++)
+        {
+            int slot = i;
+            if (s.QuickLangs == null || s.QuickLangs.Length < 4) s.QuickLangs = new[] { "es-CO", "en-US", "fr-FR", "" };
+            var cur = TLang.ById(s.QuickLangs[slot]);
+            p.Controls.Add(Row($"Quick language {slot + 1}", Pick(langs, cur, l => l == null ? "— none —" : $"{l.Flag}  {l.Label}",
+                l => { var q = s.QuickLangs.ToArray(); q[slot] = l?.Id ?? ""; s.QuickLangs = q; })));
+        }
+        p.Controls.Add(Note("These are the tiles in the 文A card; every other language is under “More languages”. " +
+                            "Translation and ✨ Improve by voice use this Groq key — the same one as Voice and AI Polish."));
 
         p.Controls.Add(Header("Style"));
         p.Controls.Add(Check("Adapt to the app I'm typing in", s.ContextAware, v => s.ContextAware = v));

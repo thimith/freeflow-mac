@@ -107,8 +107,8 @@ sealed class KeyboardHook : IDisposable
 /// System-wide combos (Ctrl+Alt+Space etc.) via RegisterHotKey.
 sealed class HotkeyWindow : NativeWindow, IDisposable
 {
-    public Action Toggle, PasteLast;
-    Combo regToggle = Combo.None, regPaste = Combo.None;
+    public Action Toggle, PasteLast, Translate;
+    Combo regToggle = Combo.None, regPaste = Combo.None, regTranslate = Combo.None;
     bool registered;
 
     public HotkeyWindow()
@@ -121,9 +121,15 @@ sealed class HotkeyWindow : NativeWindow, IDisposable
     public void Register()
     {
         var s = Settings.Current;
-        if (registered && regToggle == s.ToggleCombo && regPaste == s.PasteCombo) return;
+        if (registered && regToggle == s.ToggleCombo && regPaste == s.PasteCombo && regTranslate == s.TranslateCombo) return;
         Native.UnregisterHotKey(Handle, 1);
         Native.UnregisterHotKey(Handle, 2);
+        Native.UnregisterHotKey(Handle, 3);
+        if (s.TranslateCombo != Combo.None)
+        {
+            var (m, vk) = Labels.Keys(s.TranslateCombo);
+            Native.RegisterHotKey(Handle, 3, m | Native.MOD_NOREPEAT, vk);
+        }
         if (s.ToggleCombo != Combo.None)
         {
             var (m, vk) = Labels.Keys(s.ToggleCombo);
@@ -136,6 +142,7 @@ sealed class HotkeyWindow : NativeWindow, IDisposable
         }
         regToggle = s.ToggleCombo;
         regPaste = s.PasteCombo;
+        regTranslate = s.TranslateCombo;
         registered = true;
     }
 
@@ -145,6 +152,7 @@ sealed class HotkeyWindow : NativeWindow, IDisposable
         {
             if (m.WParam == (IntPtr)1) Toggle?.Invoke();
             else if (m.WParam == (IntPtr)2) PasteLast?.Invoke();
+            else if (m.WParam == (IntPtr)3) Translate?.Invoke();
         }
         base.WndProc(ref m);
     }
@@ -154,6 +162,7 @@ sealed class HotkeyWindow : NativeWindow, IDisposable
         Settings.Changed -= Register;
         Native.UnregisterHotKey(Handle, 1);
         Native.UnregisterHotKey(Handle, 2);
+        Native.UnregisterHotKey(Handle, 3);
         DestroyHandle();
     }
 }

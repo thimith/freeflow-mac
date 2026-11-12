@@ -81,6 +81,23 @@ static class Inserter
         return text;
     }
 
+    /// The selection if there is one, otherwise the whole text box (Ctrl+A stays selected, so pasting replaces it).
+    public static string SelectionOrWholeField()
+    {
+        var s = CopySelection();
+        if (!string.IsNullOrWhiteSpace(s)) return s;
+        Native.Send(Native.Key(Native.VK_CONTROL, false), Native.Key(0x41, false), Native.Key(0x41, true), Native.Key(Native.VK_CONTROL, true));
+        Thread.Sleep(60);
+        return CopySelection();
+    }
+
+    public static void SelectAll()
+    {
+        WaitForModifiersReleased();
+        Native.Send(Native.Key(Native.VK_CONTROL, false), Native.Key(0x41, false), Native.Key(0x41, true), Native.Key(Native.VK_CONTROL, true));
+        Thread.Sleep(60);
+    }
+
     public static bool SetClipboard(string text, bool transient)
     {
         try

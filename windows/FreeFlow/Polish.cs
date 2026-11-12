@@ -185,11 +185,65 @@ static class Llm
         {
             AiProvider.Off => throw new FFException("AI is off — pick a provider in Settings → AI Polish"),
             AiProvider.Ollama => await Chat(s.OllamaUrl, "", s.OllamaModel, system, user, ct),
-            AiProvider.Groq => string.IsNullOrWhiteSpace(s.GroqKey)
-                ? throw new FFException("Add your free Groq API key in Settings")
-                : await Chat("https://api.groq.com/openai/v1", s.GroqKey, s.GroqLlmModel, system, user, ct),
+            AiProvider.Groq => await Groq(system, user, ct),
             _ => await Chat(s.CustomBase, s.CustomKey, s.CustomLlmModel, system, user, ct),
         };
+    }
+
+    const string GroqBase = "https://api.groq.com/openai/v1";
+    static readonly string[] Preferred =
+    {
+        "llama-3.3-70b-versatile", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct", "openai/gpt-oss-20b",
+        "meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant", "qwen/qwen3-32b",
+    };
+
+    /// Groq chat with automatic fallback when Groq retires the configured model.
+    public static async Task<string> Groq(string system, string user, CancellationToken ct = default)
+    {
+        var s = Settings.Current;
+        if (string.IsNullOrWhiteSpace(s.GroqKey)) throw new FFException("Add your free Groq API key in Settings → AI Polish");
+        try { return await Chat(GroqBase, s.GroqKey, s.GroqLlmModel, system, user, ct); }
+        catch (FFException e) when (ModelGone(e.Message))
+        {
+            s.GroqLlmModel = await PickModel(s.GroqKey, ct);
+            s.Save();
+            return await Chat(GroqBase, s.GroqKey, s.GroqLlmModel, system, user, ct);
+        }
+    }
+
+    static bool ModelGone(string m)
+    {
+        m = m.ToLowerInvariant();
+        return m.Contains("http 404") || m.Contains("decommissioned") || m.Contains("model_not_found") || m.Contains("does not exist");
+    }
+
+    static async Task<string> PickModel(string key, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, GroqBase + "/models");
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key.Trim());
+        using var doc = JsonDocument.Parse(await Http.Send(Http.Cloud, req, ct));
+        var ids = doc.RootElement.GetProperty("data").EnumerateArray().Select(x => x.GetProperty("id").GetString() ?? "").ToList();
+        var best = Preferred.FirstOrDefault(ids.Contains);
+        if (best != null) return best;
+        string[] skip = { "whisper", "tts", "guard", "orpheus", "playai", "compound" };
+        return ids.FirstOrDefault(id => !skip.Any(k => id.ToLowerInvariant().Contains(k)))
+               ?? throw new FFException("Groq has no chat model available right now");
+    }
+
+    public static async Task<string> Translate(string text, TLang lang, CancellationToken ct = default)
+    {
+        var system = $"You are a professional translator. Translate the user's text into {lang.Prompt}. " +
+                     "Sound like a native speaker writing a natural message: keep the meaning, tone, level of formality, " +
+                     "emojis, names, line breaks and formatting. If part of the text is already in the target language, keep it. " +
+                     "Output ONLY the translation — no quotes, notes, or explanations.";
+        string outp;
+        if (!string.IsNullOrWhiteSpace(Settings.Current.GroqKey)) outp = await Groq(system, text, ct);
+        else if (Settings.Current.Ai != AiProvider.Off) outp = await Complete(system, text, ct);
+        else throw new FFException("Add your Groq API key in Settings → AI Polish to translate");
+        var t = Cleanup.SanitizeLlm(outp, text);
+        if (t.Length == 0) throw new FFException("The translation came back empty");
+        return t;
     }
 
     static async Task<string> Chat(string baseUrl, string key, string model, string system, string user, CancellationToken ct)
@@ -296,7 +350,8 @@ static class Polisher
 
     public static async Task<string> Command(string instruction, string selection, FocusContext c, CancellationToken ct)
     {
-        if (Settings.Current.Ai == AiProvider.Off) throw new FFException("Command mode needs an AI — Settings → AI Polish");
+        if (Settings.Current.Ai == AiProvider.Off && string.IsNullOrWhiteSpace(Settings.Current.GroqKey))
+            throw new FFException("Improve-by-voice needs an AI — add your Groq key in Settings → AI Polish");
         string system, user;
         if (!string.IsNullOrWhiteSpace(selection))
         {
@@ -313,7 +368,8 @@ static class Polisher
                    + "Reply in the language of the request unless told otherwise." + Shared(c);
             user = instruction;
         }
-        var cleaned = Cleanup.SanitizeLlm(await Llm.Complete(system, user, ct), instruction);
+        var raw = Settings.Current.Ai == AiProvider.Off ? await Llm.Groq(system, user, ct) : await Llm.Complete(system, user, ct);
+        var cleaned = Cleanup.SanitizeLlm(raw, instruction);
         if (cleaned.Length == 0) throw new FFException("The AI returned nothing");
         return cleaned;
     }

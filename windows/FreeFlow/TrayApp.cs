@@ -78,7 +78,7 @@ sealed class TrayApp : ApplicationContext
         dock.Recent = () => translateBar.ShowRecentNear(dock.Bounds);
         dock.CardOpen = () => translateBar.CardOpen;
         dock.ShowDock();
-        Settings.Changed += () => { if (Settings.Current.ShowDock != dock.Visible) dock.ShowDock(); };
+        Settings.Changed += () => { if (Settings.Current.ShowDock) dock.ShowDock(); else dock.Hide(); };
 
         recorder.Level = overlay.PushLevel;
         tapTimer.Tick += (_, _) => { tapTimer.Stop(); if (state == RecState.PendingTap) CancelRecording(silently: true); };

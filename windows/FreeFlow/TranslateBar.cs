@@ -205,11 +205,11 @@ sealed class TranslateBar : Form
     {
         if (anchor is { } a && !pill)
         {
-            // next to the floating bubble: to its left if there's room, else to its right; bottoms aligned
+            // just above the floating bubble (below it if it's near the top), right edges aligned
             var wa2 = Screen.FromRectangle(a).WorkingArea;
-            int x = a.Left - size.Width - D(10);
-            if (x < wa2.Left) x = a.Right + D(10);
-            int y = Math.Clamp(a.Bottom - size.Height, wa2.Top, wa2.Bottom - size.Height);
+            int x = Math.Clamp(a.Right - size.Width, wa2.Left, wa2.Right - size.Width);
+            int y = a.Top - size.Height - D(10);
+            if (y < wa2.Top) y = Math.Min(a.Bottom + D(10), wa2.Bottom - size.Height);
             Bounds = new Rectangle(x, y, size.Width, size.Height);
         }
         else

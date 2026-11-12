@@ -5,7 +5,7 @@ namespace FreeFlow;
 
 public enum TriggerKey { CtrlWin, RightCtrl, RightAlt, CapsLock }
 public enum Combo { None, CtrlAltSpace, CtrlShiftSpace, AltShiftSpace, CtrlAltV, CtrlShiftV, AltShiftV, CtrlAltT, AltShiftT }
-public enum SttProvider { LocalWhisper, Groq, Custom }
+public enum SttProvider { Groq, LocalWhisper, Custom }
 public enum AiProvider { Off, Ollama, Groq, Custom }
 public enum InsertMethod { Paste, Type }
 
@@ -42,8 +42,8 @@ public static class Labels
     };
     public static string Of(SttProvider p) => p switch
     {
-        SttProvider.LocalWhisper => "Local Whisper — free, offline, private",
-        SttProvider.Groq => "Groq Whisper — free tier, cloud, fastest",
+        SttProvider.Groq => "Groq Whisper — fastest, most accurate (recommended)",
+        SttProvider.LocalWhisper => "Local Whisper — offline, private, slower",
         SttProvider.Custom => "Custom OpenAI-compatible API",
         _ => p.ToString(),
     };
@@ -84,7 +84,9 @@ public sealed class Settings
     public TriggerKey Trigger { get; set; } = TriggerKey.CtrlWin;
     public Combo ToggleCombo { get; set; } = Combo.CtrlAltSpace;
     public Combo PasteCombo { get; set; } = Combo.CtrlAltV;
-    public SttProvider Stt { get; set; } = SttProvider.LocalWhisper;
+    public SttProvider Stt { get; set; } = SttProvider.Groq;
+    /// Bumped when defaults change for existing installs (2 = Groq becomes the speech engine).
+    public int DefaultsVersion { get; set; }
     public AiProvider Ai { get; set; } = AiProvider.Off;
     public string WhisperModel { get; set; } = "large-v3-turbo-q5_0";
     public string Language { get; set; } = "auto";
@@ -134,11 +136,20 @@ public sealed class Settings
         try
         {
             if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Opts) ?? new Settings();
+            {
+                var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Opts) ?? new Settings();
+                if (loaded.DefaultsVersion < 2)
+                {
+                    loaded.Stt = SttProvider.Groq;   // Groq is now the default speech engine
+                    loaded.DefaultsVersion = 2;
+                    try { File.WriteAllText(FilePath, JsonSerializer.Serialize(loaded, Opts)); } catch { }
+                }
+                return loaded;
+            }
         }
         catch { /* corrupted file → defaults */ }
         IsFirstRun = true;
-        return new Settings();
+        return new Settings { DefaultsVersion = 2 };
     }
 
     public void Save()

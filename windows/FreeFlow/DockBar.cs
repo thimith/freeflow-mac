@@ -13,11 +13,9 @@ sealed class DockBar : Form
     public Func<bool> CardOpen = () => false;
 
     DockState state = DockState.Idle;
-    bool expanded, hover, dragging, pressed;
+    bool dragging, pressed;
     Point downScreen, downLocation;
-    int pinnedUntilTick;
     int hot = -1;   // hovered button index
-    readonly System.Windows.Forms.Timer collapseTimer = new() { Interval = 400 };
 
     const int Size1 = 48, Gap = 6;
     static readonly Color Purple = Color.FromArgb(124, 77, 255), Blue = Color.FromArgb(40, 110, 255);
@@ -31,7 +29,6 @@ sealed class DockBar : Form
         BackColor = Color.FromArgb(22, 22, 28);
         DoubleBuffered = true;
         Opacity = 0.96;
-        collapseTimer.Tick += (_, _) => MaybeCollapse();
     }
 
     protected override bool ShowWithoutActivation => true;
@@ -55,21 +52,26 @@ sealed class DockBar : Form
 
     float S => DeviceDpi / 96f;
     int D(float v) => (int)(v * S);
-    int Step => D(Size1 + Gap);
 
     // ───────── placement ─────────
 
-    /// Where the mic circle sits (top-left), in screen coordinates.
-    Point MicOrigin
+    int Btn => D(40);
+    int MicSz => D(Size1);
+    bool HasTranslate => Settings.Current.TranslateAfterDictation;
+    int Count => HasTranslate ? 3 : 2;
+    int DockW => D(6) + MicSz + (Count - 1) * (D(Gap) + Btn) + D(6);
+    int DockH => MicSz + D(8);
+
+    /// Top-left of the bubble, in screen coordinates (saved when you drag it).
+    Point Origin
     {
         get
         {
             var s = Settings.Current;
             var wa = Screen.PrimaryScreen.WorkingArea;
-            var p = s.DockX >= 0 ? new Point(s.DockX, s.DockY) : new Point(wa.Right - D(Size1) - D(24), wa.Bottom - D(Size1) - D(120));
-            // keep it on some screen
-            if (!Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(new Rectangle(p, new Size(D(Size1), D(Size1))))))
-                p = new Point(wa.Right - D(Size1) - D(24), wa.Bottom - D(Size1) - D(120));
+            var def = new Point(wa.Right - DockW - D(24), wa.Bottom - DockH - D(24));
+            var p = s.DockX >= 0 ? new Point(s.DockX, s.DockY) : def;
+            if (!Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(new Rectangle(p, new Size(DockW, DockH))))) p = def;
             return p;
         }
     }
@@ -84,55 +86,36 @@ sealed class DockBar : Form
 
     void Layout2()
     {
-        var mic = MicOrigin;
-        int w = D(Size1) + D(8), h = expanded ? D(Size1) + 2 * Step + D(8) : D(Size1) + D(8);
-        Bounds = new Rectangle(mic.X - D(4), mic.Y - (h - D(Size1) - D(4)), w, h);
-        using var path = Capsule(new Rectangle(0, 0, w, h));
+        Bounds = new Rectangle(Origin, new Size(DockW, DockH));
+        using var path = Capsule(new Rectangle(0, 0, DockW, DockH));
         Region = new Region(path);
         Invalidate();
     }
 
     public void SetState(DockState s) { state = s; Invalidate(); }
 
-    /// Open up for a few seconds (after a dictation).
-    public void ExpandFor(int ms)
-    {
-        if (!Visible) return;
-        pinnedUntilTick = Environment.TickCount + ms;
-        Expand();
-    }
-
-    void Expand()
-    {
-        if (!expanded) { expanded = true; Layout2(); }
-        collapseTimer.Start();
-    }
-
-    void MaybeCollapse()
-    {
-        if (!expanded) { collapseTimer.Stop(); return; }
-        bool cursorIn = Bounds.Contains(Cursor.Position);
-        if (cursorIn || CardOpen() || Environment.TickCount < pinnedUntilTick || dragging) return;
-        expanded = false;
-        collapseTimer.Stop();
-        Layout2();
-    }
+    /// Kept for compatibility: the bubble is always fully visible now.
+    public void ExpandFor(int ms) { if (Settings.Current.ShowDock && !Visible) ShowDock(); TopMost = true; }
 
     // ───────── input ─────────
 
-    /// 0 = 📋 recent, 1 = 文A translate, 2 = mic (bottom).
+    Rectangle MicRect => new(D(6), D(4), MicSz, MicSz);
+    Rectangle SmallRect(int i) => new(D(6) + MicSz + D(Gap) + i * (Btn + D(Gap)), (DockH - Btn) / 2, Btn, Btn);
+
+    /// 0 = mic, 1 = 文A (if shown), 2 = 📋
     int HitTest(Point p)
     {
-        int micTop = Height - D(4) - D(Size1);
-        if (p.Y >= micTop) return 2;
-        if (!expanded) return -1;
-        if (p.Y >= micTop - Step) return 1;
-        if (p.Y >= micTop - 2 * Step) return 0;
+        if (MicRect.Contains(p)) return 0;
+        if (HasTranslate)
+        {
+            if (SmallRect(0).Contains(p)) return 1;
+            if (SmallRect(1).Contains(p)) return 2;
+        }
+        else if (SmallRect(0).Contains(p)) return 2;
         return -1;
     }
 
-    protected override void OnMouseEnter(EventArgs e) { hover = true; Expand(); base.OnMouseEnter(e); }
-    protected override void OnMouseLeave(EventArgs e) { hover = false; hot = -1; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseLeave(EventArgs e) { hot = -1; Invalidate(); base.OnMouseLeave(e); }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
@@ -140,7 +123,7 @@ sealed class DockBar : Form
         pressed = true;
         dragging = false;
         downScreen = Cursor.Position;
-        downLocation = MicOrigin;
+        downLocation = Origin;
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -155,7 +138,7 @@ sealed class DockBar : Form
             var s = Settings.Current;
             s.DockX = downLocation.X + (c.X - downScreen.X);
             s.DockY = downLocation.Y + (c.Y - downScreen.Y);
-            Layout2();
+            Location = new Point(s.DockX, s.DockY);
         }
     }
 
@@ -166,9 +149,9 @@ sealed class DockBar : Form
         if (dragging) { dragging = false; Settings.Current.Save(); return; }
         switch (HitTest(e.Location))
         {
-            case 2: Mic?.Invoke(); break;
+            case 0: Mic?.Invoke(); break;
             case 1: Translate?.Invoke(); break;
-            case 0: Recent?.Invoke(); break;
+            case 2: Recent?.Invoke(); break;
         }
     }
 
@@ -183,24 +166,24 @@ sealed class DockBar : Form
         using (var path = Capsule(new Rectangle(0, 0, Width - 1, Height - 1)))
             g.DrawPath(rim, path);
 
-        int x = D(4), micTop = Height - D(4) - D(Size1), sz = D(Size1);
-        // mic
-        var micRect = new Rectangle(x, micTop, sz, sz);
-        if (state == DockState.Recording) Fill(g, micRect, Color.FromArgb(255, 59, 48), Color.FromArgb(255, 59, 48));
-        else if (state == DockState.Busy) Fill(g, micRect, Color.FromArgb(255, 159, 10), Color.FromArgb(255, 120, 10));
-        else Fill(g, micRect, Purple, Blue);
-        if (hot == 2) Ring(g, micRect);
-        Glyph(g, state == DockState.Recording ? "■" : state == DockState.Busy ? "…" : "🎙", micRect, 15f);
+        var mic = MicRect;
+        if (state == DockState.Recording) Fill(g, mic, Color.FromArgb(255, 59, 48), Color.FromArgb(255, 59, 48));
+        else if (state == DockState.Busy) Fill(g, mic, Color.FromArgb(255, 159, 10), Color.FromArgb(255, 120, 10));
+        else Fill(g, mic, Purple, Blue);
+        if (hot == 0) Ring(g, mic);
+        Glyph(g, state == DockState.Recording ? "■" : state == DockState.Busy ? "…" : "🎙", mic, 15f);
 
-        if (!expanded) return;
-        var tr = new Rectangle(x + D(4), micTop - Step + D(4), sz - D(8), sz - D(8));
-        Fill(g, tr, Color.FromArgb(64, 64, 80), Color.FromArgb(64, 64, 80));
-        if (hot == 1) Ring(g, tr);
-        Glyph(g, "文A", tr, 10.5f, bold: true);
-
-        var rc = new Rectangle(x + D(4), micTop - 2 * Step + D(4), sz - D(8), sz - D(8));
+        int i = 0;
+        if (HasTranslate)
+        {
+            var tr = SmallRect(i++);
+            Fill(g, tr, Color.FromArgb(64, 64, 80), Color.FromArgb(64, 64, 80));
+            if (hot == 1) Ring(g, tr);
+            Glyph(g, "文A", tr, 10f, bold: true);
+        }
+        var rc = SmallRect(i);
         Fill(g, rc, Color.FromArgb(64, 64, 80), Color.FromArgb(64, 64, 80));
-        if (hot == 0) Ring(g, rc);
+        if (hot == 2) Ring(g, rc);
         Glyph(g, "📋", rc, 12f);
     }
 
@@ -227,8 +210,8 @@ sealed class DockBar : Form
     {
         var p = new GraphicsPath();
         int d = Math.Min(r.Width, r.Height);
-        p.AddArc(r.X, r.Y, d, d, 180, 180);
-        p.AddArc(r.X, r.Bottom - d, d, d, 0, 180);
+        p.AddArc(r.X, r.Y, d, d, 90, 180);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 180);
         p.CloseFigure();
         return p;
     }

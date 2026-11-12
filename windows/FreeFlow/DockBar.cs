@@ -123,6 +123,12 @@ sealed class DockBar : LayeredWindow
 
     void Tick()
     {
+        try { TickCore(); }
+        catch (Exception ex) { Program.Log(ex); frame.Stop(); }
+    }
+
+    void TickCore()
+    {
         float target = TargetWidth();
         if (Math.Abs(target - tweenTo) > 0.5f)
         {
@@ -270,7 +276,7 @@ sealed class DockBar : LayeredWindow
     {
         float fit = Fit(r);
         float s = (1 + 0.06f * hov[id] + pressS[id] + extra) * (0.35f + 0.65f * EaseOut(fit));
-        if (fit <= 0.02f) return RectangleF.Empty;
+        if (fit <= 0.02f) return new RectangleF(r.X + r.Width / 2, r.Y + r.Height / 2, 0, 0);
         if (fit < 1)
         {
             // keep the shrunken element inside the capsule

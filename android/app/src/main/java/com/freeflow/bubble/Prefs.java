@@ -31,6 +31,9 @@ public final class Prefs {
     public boolean largeBubble() { return p.getBoolean("largeBubble", false); }
     public void largeBubble(boolean v) { p.edit().putBoolean("largeBubble", v).apply(); }
 
+    public String theme() { return p.getString("theme", "aurora"); }
+    public void theme(String id) { p.edit().putString("theme", id).apply(); }
+
     public boolean haptics() { return p.getBoolean("haptics", true); }
     public void haptics(boolean v) { p.edit().putBoolean("haptics", v).apply(); }
 

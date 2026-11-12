@@ -149,39 +149,42 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
 
     private DisplayMetrics screen() { return getResources().getDisplayMetrics(); }
 
+    private Theme theme;
+
     private void buildBubble() {
-        int size = dp(prefs.largeBubble() ? 66 : 56);
-        int small = dp(prefs.largeBubble() ? 46 : 40);
+        theme = Theme.byId(prefs.theme());
+        int btn = dp(prefs.largeBubble() ? 46 : 40);   // every button the same size → slim capsule
         bubble = new LinearLayout(this);
         bubble.setOrientation(LinearLayout.VERTICAL);
         bubble.setGravity(Gravity.CENTER_HORIZONTAL);
-        bubble.setPadding(dp(5), dp(6), dp(5), dp(6));
+        bubble.setPadding(dp(4), dp(5), dp(4), dp(5));
         bubble.setClipChildren(false);
         bubble.setClipToPadding(false);
-        // One solid capsule holding both buttons, with a light rim so it stands out on dark and light apps.
         GradientDrawable capsule = new GradientDrawable();
-        capsule.setColor(Color.argb(240, 18, 18, 24));
-        capsule.setCornerRadius(dp(40));
-        capsule.setStroke(dp(2), Color.argb(110, 255, 255, 255));
+        capsule.setColor(theme.capsule);
+        capsule.setCornerRadius(theme.cornerDp < 0 ? dp(40) : dp(theme.cornerDp));
+        capsule.setStroke(Math.max(1, (int) (theme.strokeDp * getResources().getDisplayMetrics().density)), theme.stroke);
         bubble.setBackground(capsule);
         bubble.setElevation(dp(12));
 
-        edit = new BubbleButton(this, BubbleButton.Kind.EDIT);
-        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(small, small);
-        elp.bottomMargin = dp(6);
+        edit = new BubbleButton(this, BubbleButton.Kind.EDIT, theme);
+        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(btn, btn);
+        elp.bottomMargin = dp(5);
         bubble.addView(edit, elp);
 
-        tr = new BubbleButton(this, BubbleButton.Kind.TRANSLATE);
-        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(small, small);
-        tlp.bottomMargin = dp(6);
+        tr = new BubbleButton(this, BubbleButton.Kind.TRANSLATE, theme);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(btn, btn);
+        tlp.bottomMargin = dp(5);
         bubble.addView(tr, tlp);
 
-        mic = new BubbleButton(this, BubbleButton.Kind.MIC);
-        bubble.addView(mic, new LinearLayout.LayoutParams(size, size));
+        mic = new BubbleButton(this, BubbleButton.Kind.MIC, theme);
+        bubble.addView(mic, new LinearLayout.LayoutParams(btn, btn));
 
-        mic.setOnTouchListener(new Toucher(this::micTap, this::micHoldStart, this::micHoldEnd));
-        tr.setOnTouchListener(new Toucher(this::translateTap, null, null));
-        edit.setOnTouchListener(new Toucher(this::editTap, this::editHoldStart, this::micHoldEnd));
+        // tap = action · drag = move · long-press anywhere = settings
+        mic.setOnTouchListener(new Toucher(this::micTap));
+        tr.setOnTouchListener(new Toucher(this::translateTap));
+        edit.setOnTouchListener(new Toucher(this::editTap));
+        bubble.setOnTouchListener(new Toucher(() -> { }));
         active = mic;
 
         lp = new WindowManager.LayoutParams(
@@ -209,31 +212,37 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
     }
 
     /** Tap / hold / drag handling shared by both buttons. Drag moves the bubble; release snaps it to the nearest edge. */
+    /** Tap / drag / long-press handling. Drag moves the bubble (snaps to the nearest edge); long-press opens settings. */
     private class Toucher implements View.OnTouchListener {
-        final Runnable tap, holdStart, holdEnd;
+        final Runnable tap;
         float downX, downY;
         int startY;
-        boolean dragging, holding;
+        boolean dragging, longPressed;
         final int slop = ViewConfiguration.get(FlowService.this).getScaledTouchSlop();
-        final Runnable holdTask = new Runnable() {
-            @Override public void run() { holding = true; if (holdStart != null) holdStart.run(); }
+        final Runnable longTask = new Runnable() {
+            @Override public void run() {
+                longPressed = true;
+                if (prefs.haptics() && bubble != null) bubble.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                closePopup();
+                openApp();
+            }
         };
 
-        Toucher(Runnable tap, Runnable holdStart, Runnable holdEnd) { this.tap = tap; this.holdStart = holdStart; this.holdEnd = holdEnd; }
+        Toucher(Runnable tap) { this.tap = tap; }
 
         @Override
         public boolean onTouch(View v, MotionEvent e) {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     downX = e.getRawX(); downY = e.getRawY(); startY = lp.y;
-                    dragging = false; holding = false;
-                    if (holdStart != null && !recording && !busy) h.postDelayed(holdTask, 380);
+                    dragging = false; longPressed = false;
+                    h.postDelayed(longTask, 600);
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     float dx = e.getRawX() - downX, dy = e.getRawY() - downY;
-                    if (!dragging && !holding && (Math.abs(dy) > slop * 1.5f || Math.abs(dx) > slop * 1.5f)) {
+                    if (!dragging && !longPressed && (Math.abs(dy) > slop * 1.5f || Math.abs(dx) > slop * 1.5f)) {
                         dragging = true;
-                        h.removeCallbacks(holdTask);
+                        h.removeCallbacks(longTask);
                         closePopup();
                     }
                     if (dragging) {
@@ -244,15 +253,13 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    h.removeCallbacks(holdTask);
+                    h.removeCallbacks(longTask);
                     if (dragging) {
                         boolean left = e.getRawX() < screen().widthPixels / 2f;
                         lp.gravity = Gravity.TOP | (left ? Gravity.LEFT : Gravity.RIGHT);
                         try { wm.updateViewLayout(bubble, lp); } catch (Exception ignored) { }
                         prefs.bubblePos(lp.y, left);
-                    } else if (holding) {
-                        if (holdEnd != null) holdEnd.run();
-                    } else if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+                    } else if (!longPressed && e.getActionMasked() == MotionEvent.ACTION_UP) {
                         tap.run();
                     }
                     return true;
@@ -374,7 +381,11 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         error(why);
     }
 
-    @Override public void onLevel(float level) { if (recording) active.setLevel(level); }
+    @Override public void onLevel(float level) {
+        if (!recording) return;
+        active.setLevel(level);
+        if (strip != null) strip.push(level);
+    }
     @Override public void onStarted() { }
     @Override public void onFailed(String why) { if (recording) onMicFailed(why); }
 
@@ -396,6 +407,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         }
         busy = true;
         b.setState(BubbleButton.State.BUSY);
+        if (strip != null) strip.setStatus(theme.matrix ? "DECRYPTING…" : mode == Mode.EDIT ? "Rewriting…" : "Transcribing…");
         final TextTarget t = target;
         final Mode m = mode;
         final String source = editSource;
@@ -448,34 +460,27 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         refresh();
     }
 
+    private RecordingStrip strip;
+
+    /** The live-voice strip (waveform / Matrix glyphs + timer + ✕) beside the bubble. */
     private void showCancel() {
         hideCancel();
-        TextView x = new TextView(this);
-        x.setText("✕");
-        x.setTextColor(Color.WHITE);
-        x.setTextSize(18);
-        x.setGravity(Gravity.CENTER);
-        x.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        GradientDrawable g = new GradientDrawable();
-        g.setShape(GradientDrawable.OVAL);
-        g.setColor(Color.rgb(58, 58, 70));
-        g.setStroke(dp(2), Color.argb(150, 255, 255, 255));
-        x.setBackground(g);
-        x.setElevation(dp(8));
-        x.setOnClickListener(v -> cancelDictation());
-        int size = dp(prefs.largeBubble() ? 46 : 40);
-        WindowManager.LayoutParams p = new WindowManager.LayoutParams(size, size,
+        RecordingStrip st = new RecordingStrip(this, theme, this::cancelDictation);
+        st.setElevation(dp(10));
+        int hgt = dp(prefs.largeBubble() ? 52 : 46);
+        WindowManager.LayoutParams p = new WindowManager.LayoutParams(dp(prefs.largeBubble() ? 220 : 200), hgt,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT);
         p.gravity = lp.gravity;
-        p.x = lp.x + (bubble.getWidth() > 0 ? bubble.getWidth() : dp(70)) + dp(6);
-        int micCenter = mic.getHeight() > 0 ? mic.getTop() + mic.getHeight() / 2 : dp(150);
-        p.y = lp.y + micCenter - size / 2;
-        try { wm.addView(x, p); cancelChip = x; } catch (Exception ignored) { }
+        p.x = lp.x + (bubble.getWidth() > 0 ? bubble.getWidth() : dp(52)) + dp(6);
+        int micCenter = mic.getHeight() > 0 ? mic.getTop() + mic.getHeight() / 2 : dp(130);
+        p.y = lp.y + micCenter - hgt / 2;
+        try { wm.addView(st, p); strip = st; cancelChip = st; } catch (Exception ignored) { }
     }
 
     private void hideCancel() {
+        strip = null;
         if (cancelChip == null) return;
         try { wm.removeView(cancelChip); } catch (Exception ignored) { }
         cancelChip = null;

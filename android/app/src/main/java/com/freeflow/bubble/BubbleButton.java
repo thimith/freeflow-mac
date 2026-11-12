@@ -2,7 +2,6 @@ package com.freeflow.bubble;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -11,33 +10,31 @@ import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.view.View;
 
-/** A round, self-drawn button: the mic bubble or the translate button above it. */
+/** A self-drawn bubble button (mic, translate, ✨ edit), styled by the current Theme. */
 public class BubbleButton extends View {
     public enum Kind { MIC, TRANSLATE, EDIT }
     public enum State { IDLE, RECORDING, EDIT_RECORDING, BUSY, DONE, ERROR }
 
     private final Kind kind;
+    private Theme theme;
     private State state = State.IDLE;
-    private float level;
-    private float spin;
+    private float level, spin;
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint icon = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final float dp;
 
-    public BubbleButton(Context c, Kind kind) {
+    public BubbleButton(Context c, Kind kind, Theme theme) {
         super(c);
         this.kind = kind;
+        this.theme = theme;
         dp = c.getResources().getDisplayMetrics().density;
-        ring.setStyle(Paint.Style.STROKE);
-        icon.setColor(Color.WHITE);
         icon.setStyle(Paint.Style.STROKE);
         icon.setStrokeCap(Paint.Cap.ROUND);
-        text.setColor(Color.WHITE);
+        icon.setStrokeJoin(Paint.Join.ROUND);
         text.setTextAlign(Paint.Align.CENTER);
-        text.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-        setElevation(2 * dp);
+        setLayerType(LAYER_TYPE_HARDWARE, null);
     }
 
     public void setState(State s) {
@@ -50,94 +47,118 @@ public class BubbleButton extends View {
 
     public void setLevel(float l) { level = level * 0.5f + l * 0.5f; invalidate(); }
 
+    private boolean recording() { return state == State.RECORDING || state == State.EDIT_RECORDING; }
+
+    /** Button outline: circle, or a rounded square for the Matrix theme. */
+    private void shape(Canvas c, float cx, float cy, float r, Paint p) {
+        if (theme.square) {
+            float k = 3 * dp;
+            c.drawRoundRect(new RectF(cx - r, cy - r, cx + r, cy + r), k, k, p);
+        } else c.drawCircle(cx, cy, r, p);
+    }
+
     @Override
     protected void onDraw(Canvas c) {
         float w = getWidth(), h = getHeight();
         float cx = w / 2f, cy = h / 2f;
-        float r = Math.min(w, h) / 2f - 3 * dp;
-
-        // halo that follows your voice
-        if (state == State.RECORDING || state == State.EDIT_RECORDING) {
-            int col = state == State.RECORDING ? Color.argb(90, 255, 69, 58) : Color.argb(90, 175, 130, 255);
-            ring.setColor(col);
-            ring.setStyle(Paint.Style.FILL);
-            c.drawCircle(cx, cy, r * (0.92f + 0.08f * level) + 2 * dp * level, ring);
-            ring.setStyle(Paint.Style.STROKE);
-        }
+        float r = Math.min(w, h) / 2f - 2 * dp;
 
         // body
-        float br = (state == State.RECORDING || state == State.EDIT_RECORDING) ? r * (0.86f + 0.06f * level) : r * 0.92f;
-        switch (state) {
-            case RECORDING: fill.setShader(null); fill.setColor(Color.rgb(255, 59, 48)); break;
-            case EDIT_RECORDING: fill.setShader(null); fill.setColor(Color.rgb(150, 90, 255)); break;
-            case DONE: fill.setShader(null); fill.setColor(Color.rgb(48, 199, 89)); break;
-            case ERROR: fill.setShader(null); fill.setColor(Color.rgb(255, 159, 10)); break;
-            default:
-                if (kind == Kind.EDIT)
-                    fill.setShader(new LinearGradient(0, 0, w, h, Color.rgb(170, 110, 255), Color.rgb(236, 72, 153), Shader.TileMode.CLAMP));
-                else if (kind == Kind.MIC)
-                    fill.setShader(new LinearGradient(0, 0, w, h, Color.rgb(124, 77, 255), Color.rgb(40, 110, 255), Shader.TileMode.CLAMP));
-                else { fill.setShader(null); fill.setColor(Color.rgb(64, 64, 80)); }
-        }
-        c.drawCircle(cx, cy, br, fill);
+        float br = recording() ? r * (0.90f + 0.08f * level) : r;
         fill.setShader(null);
-
-        // busy spinner
-        if (state == State.BUSY) {
-            ring.setColor(Color.WHITE);
-            ring.setStrokeWidth(2.5f * dp);
-            float sr = br - 4 * dp;
-            c.drawArc(new RectF(cx - sr, cy - sr, cx + sr, cy + sr), spin, 260, false, ring);
-            spin = (spin + 12) % 360;
-            postInvalidateOnAnimation();
+        int iconColor = theme.iconChip;
+        switch (state) {
+            case RECORDING: fill.setColor(theme.rec); iconColor = theme.matrix ? theme.iconAccent : 0xFFFFFFFF; break;
+            case EDIT_RECORDING: fill.setColor(theme.editRec); iconColor = theme.matrix ? theme.iconAccent : 0xFFFFFFFF; break;
+            case DONE: fill.setColor(theme.done); iconColor = theme.matrix ? 0xFF000000 : 0xFFFFFFFF; break;
+            case ERROR: fill.setColor(theme.err); iconColor = 0xFF000000; break;
+            default:
+                if (kind == Kind.MIC) {
+                    fill.setShader(new LinearGradient(0, 0, w, h, theme.micA, theme.micB, Shader.TileMode.CLAMP));
+                    iconColor = theme.iconAccent;
+                } else if (kind == Kind.EDIT) {
+                    fill.setShader(new LinearGradient(0, 0, w, h, theme.editA, theme.editB, Shader.TileMode.CLAMP));
+                    iconColor = theme.matrix ? theme.iconAccent : 0xFFFFFFFF;
+                } else fill.setColor(theme.chip);
+        }
+        shape(c, cx, cy, br, fill);
+        fill.setShader(null);
+        if (theme.matrix) {
+            ring.setStyle(Paint.Style.STROKE);
+            ring.setStrokeWidth(1.2f * dp);
+            ring.setColor(theme.stroke);
+            shape(c, cx, cy, br, ring);
         }
 
-        // icon
-        icon.setStrokeWidth(Math.max(2f, br * 0.09f));
+        icon.setColor(iconColor);
+        text.setColor(iconColor);
+        icon.setStrokeWidth(Math.max(2f, br * 0.11f));
+
+        if (state == State.BUSY) {
+            ring.setStyle(Paint.Style.STROKE);
+            ring.setColor(iconColor);
+            ring.setStrokeWidth(2.4f * dp);
+            ring.setStrokeCap(Paint.Cap.ROUND);
+            float sr = br * 0.55f;
+            c.drawArc(new RectF(cx - sr, cy - sr, cx + sr, cy + sr), spin, 260, false, ring);
+            spin = (spin + 10) % 360;
+            postInvalidateOnAnimation();
+            return;
+        }
         if (state == State.DONE) {
             Path p = new Path();
-            p.moveTo(cx - br * 0.32f, cy);
-            p.lineTo(cx - br * 0.08f, cy + br * 0.24f);
-            p.lineTo(cx + br * 0.34f, cy - br * 0.22f);
+            p.moveTo(cx - br * 0.36f, cy + br * 0.02f);
+            p.lineTo(cx - br * 0.08f, cy + br * 0.28f);
+            p.lineTo(cx + br * 0.38f, cy - br * 0.24f);
             c.drawPath(p, icon);
-        } else if (state == State.ERROR) {
-            text.setTextSize(br * 1.0f);
-            c.drawText("!", cx, cy + br * 0.35f, text);
-        } else if (state != State.BUSY) {
-            if (kind == Kind.MIC) drawMic(c, cx, cy, br);
-            else if (kind == Kind.EDIT) drawEdit(c, cx, cy, br);
-            else drawTranslate(c, cx, cy, br);
+            return;
         }
-    }
-
-    private void drawMic(Canvas c, float cx, float cy, float r) {
-        if (state == State.RECORDING || state == State.EDIT_RECORDING) {   // stop square
+        if (state == State.ERROR) {
+            text.setTypeface(Typeface.DEFAULT_BOLD);
+            text.setTextSize(br * 1.1f);
+            c.drawText("!", cx, cy + br * 0.38f, text);
+            return;
+        }
+        if (recording()) {   // stop square
             icon.setStyle(Paint.Style.FILL);
-            float s = r * 0.32f;
+            float s = br * 0.34f;
             c.drawRoundRect(new RectF(cx - s, cy - s, cx + s, cy + s), s * 0.3f, s * 0.3f, icon);
             icon.setStyle(Paint.Style.STROKE);
             return;
         }
-        float cw = r * 0.22f, ch = r * 0.40f;
+        switch (kind) {
+            case MIC: drawMic(c, cx, cy, br); break;
+            case EDIT: drawEdit(c, cx, cy, br); break;
+            default: drawTranslate(c, cx, cy, br);
+        }
+    }
+
+    private void drawMic(Canvas c, float cx, float cy, float r) {
+        float cw = r * 0.24f, top = cy - r * 0.52f, bot = cy + r * 0.10f;
         icon.setStyle(Paint.Style.FILL);
-        c.drawRoundRect(new RectF(cx - cw, cy - ch - r * 0.12f, cx + cw, cy + ch * 0.55f - r * 0.12f), cw, cw, icon);
+        c.drawRoundRect(new RectF(cx - cw, top, cx + cw, bot), cw, cw, icon);
         icon.setStyle(Paint.Style.STROKE);
-        float ar = r * 0.38f;
+        float ar = r * 0.42f;
         c.drawArc(new RectF(cx - ar, cy - ar - r * 0.12f, cx + ar, cy + ar - r * 0.12f), 15, 150, false, icon);
-        c.drawLine(cx, cy + ar - r * 0.12f, cx, cy + r * 0.42f, icon);
-        c.drawLine(cx - r * 0.18f, cy + r * 0.42f, cx + r * 0.18f, cy + r * 0.42f, icon);
+        c.drawLine(cx, cy + ar - r * 0.12f, cx, cy + r * 0.48f, icon);
+    }
+
+    private void drawTranslate(Canvas c, float cx, float cy, float r) {
+        text.setTypeface(theme.matrix ? Typeface.MONOSPACE : Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        text.setTextSize(r * 0.70f);
+        c.drawText("文", cx - r * 0.22f, cy + r * 0.04f, text);
+        text.setTextSize(r * 0.62f);
+        c.drawText("A", cx + r * 0.30f, cy + r * 0.48f, text);
     }
 
     /** Pencil + sparkles: "improve my text by voice". */
     private void drawEdit(Canvas c, float cx, float cy, float r) {
-        if (state == State.EDIT_RECORDING) { drawMic(c, cx, cy, r); return; }   // shows the stop square
+        float s = r * 0.46f;
         icon.setStyle(Paint.Style.STROKE);
-        float s = r * 0.42f;
-        c.drawLine(cx - s * 0.8f, cy + s * 0.8f, cx + s * 0.45f, cy - s * 0.45f, icon);   // pencil
+        c.drawLine(cx - s * 0.8f, cy + s * 0.8f, cx + s * 0.45f, cy - s * 0.45f, icon);
         icon.setStyle(Paint.Style.FILL);
-        c.drawCircle(cx - s * 0.85f, cy + s * 0.85f, icon.getStrokeWidth() * 0.6f, icon);
-        star(c, cx + s * 0.55f, cy - s * 0.75f, r * 0.2f);
-        star(c, cx + s * 0.95f, cy + s * 0.05f, r * 0.12f);
+        star(c, cx + s * 0.55f, cy - s * 0.80f, r * 0.22f);
+        star(c, cx + s * 1.0f, cy + s * 0.05f, r * 0.13f);
         icon.setStyle(Paint.Style.STROKE);
     }
 
@@ -145,19 +166,5 @@ public class BubbleButton extends View {
         Path p = new Path();
         p.moveTo(x, y - s); p.quadTo(x, y, x + s, y); p.quadTo(x, y, x, y + s); p.quadTo(x, y, x - s, y); p.quadTo(x, y, x, y - s);
         c.drawPath(p, icon);
-    }
-
-    private void drawTranslate(Canvas c, float cx, float cy, float r) {
-        text.setTextSize(r * 0.62f);
-        c.drawText("文", cx - r * 0.2f, cy + r * 0.02f, text);
-        text.setTextSize(r * 0.56f);
-        c.drawText("A", cx + r * 0.28f, cy + r * 0.42f, text);
-        // tiny sparkle = AI
-        Paint sp = new Paint(Paint.ANTI_ALIAS_FLAG);
-        sp.setColor(Color.rgb(190, 160, 255));
-        float sx = cx + r * 0.42f, sy = cy - r * 0.38f, s = r * 0.16f;
-        Path p = new Path();
-        p.moveTo(sx, sy - s); p.quadTo(sx, sy, sx + s, sy); p.quadTo(sx, sy, sx, sy + s); p.quadTo(sx, sy, sx - s, sy); p.quadTo(sx, sy, sx, sy - s);
-        c.drawPath(p, sp);
     }
 }

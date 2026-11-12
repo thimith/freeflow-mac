@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
     static final int PURPLE = 0xFF7C4DFF, BLUE = 0xFF286EFF, PINK = 0xFFEC4899, GREEN = 0xFF30C759, ORANGE = 0xFFFF9F0A;
 
     private Prefs prefs;
-    private LinearLayout checklist, langSlots, spokenChips;
+    private LinearLayout checklist, langSlots, spokenChips, themeList;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -101,8 +101,15 @@ public class MainActivity extends Activity {
         buildSlots();
         tr.addView(note("Every other language stays one tap away under “More languages”."));
 
+        // ── theme
+        LinearLayout th = card(root, "🎨", "Theme", "Pick a look for the bubble");
+        themeList = new LinearLayout(this);
+        themeList.setOrientation(LinearLayout.VERTICAL);
+        th.addView(themeList);
+        buildThemes();
+
         // ── bubble
-        LinearLayout bub = card(root, "🫧", "Bubble", "Look and behaviour");
+        LinearLayout bub = card(root, "🫧", "Bubble", "Tap a button to use it · drag to move · long-press anywhere for these settings");
         bub.addView(toggle("Only while typing", "Show the bubble only when the keyboard is open", prefs.onlyWithKeyboard(), BLUE,
                 v -> { prefs.onlyWithKeyboard(v); FlowService.reload(); }));
         bub.addView(toggle("Large bubble", "Bigger buttons, easier to hit", prefs.largeBubble(), BLUE,
@@ -248,6 +255,67 @@ public class MainActivity extends Activity {
         r.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
         if (!done && action != null) r.addView(pill(action, true, l));
         return r;
+    }
+
+    // ───────── themes ─────────
+
+    private void buildThemes() {
+        themeList.removeAllViews();
+        String cur = prefs.theme();
+        for (Theme t : Theme.ALL) {
+            boolean on = t.id.equals(cur);
+            LinearLayout row = hrow();
+            row.setPadding(dp(12), dp(10), dp(12), dp(10));
+            GradientDrawable g = new GradientDrawable();
+            g.setCornerRadius(dp(16));
+            g.setColor(on ? 0x337C4DFF : CARD2);
+            g.setStroke(dp(on ? 2 : 1), on ? PURPLE : LINE);
+            row.setBackground(g);
+            row.addView(new ThemePreview(t), new LinearLayout.LayoutParams(dp(40), dp(96)));
+            LinearLayout names = new LinearLayout(this);
+            names.setOrientation(LinearLayout.VERTICAL);
+            names.setPadding(dp(16), 0, dp(8), 0);
+            TextView nm = text(t.name, 17, true, TEXT);
+            if (t.matrix) nm.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+            names.addView(nm);
+            names.addView(text(t.blurb, 13, false, MUTED));
+            row.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
+            if (on) row.addView(text("✓", 20, true, PURPLE));
+            row.setOnClickListener(v -> { prefs.theme(t.id); FlowService.reload(); buildThemes(); });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.bottomMargin = dp(8);
+            themeList.addView(row, lp);
+        }
+    }
+
+    /** A tiny drawing of the bubble in a given theme. */
+    private final class ThemePreview extends View {
+        final Theme t;
+        ThemePreview(Theme t) { super(MainActivity.this); this.t = t; }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas c) {
+            float w = getWidth(), h = getHeight(), d = getResources().getDisplayMetrics().density;
+            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            android.graphics.RectF body = new android.graphics.RectF(d, d, w - d, h - d);
+            float rad = t.cornerDp < 0 ? w / 2 : t.cornerDp * d;
+            p.setColor(t.capsule);
+            c.drawRoundRect(body, rad, rad, p);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeWidth(t.strokeDp * d);
+            p.setColor(t.stroke);
+            c.drawRoundRect(body, rad, rad, p);
+            p.setStyle(android.graphics.Paint.Style.FILL);
+            float r = w / 2 - 6 * d, cx = w / 2;
+            int[][] cols = {{t.editA, t.editB}, {t.chip, t.chip}, {t.micA, t.micB}};
+            for (int i = 0; i < 3; i++) {
+                float cy = 6 * d + r + i * (2 * r + 4 * d);
+                p.setShader(new android.graphics.LinearGradient(cx - r, cy - r, cx + r, cy + r, cols[i][0], cols[i][1], android.graphics.Shader.TileMode.CLAMP));
+                if (t.square) c.drawRoundRect(new android.graphics.RectF(cx - r, cy - r, cx + r, cy + r), 2 * d, 2 * d, p);
+                else c.drawCircle(cx, cy, r, p);
+                p.setShader(null);
+            }
+        }
     }
 
     // ───────── spoken language chips ─────────

@@ -107,13 +107,14 @@ sealed class KeyboardHook : IDisposable
 /// System-wide combos (Ctrl+Alt+Space etc.) via RegisterHotKey.
 sealed class HotkeyWindow : NativeWindow, IDisposable
 {
-    public Action Toggle, PasteLast, Translate;
+    public Action Toggle, PasteLast, Translate, Quit;
     Combo regToggle = Combo.None, regPaste = Combo.None, regTranslate = Combo.None;
     bool registered;
 
     public HotkeyWindow()
     {
-        CreateHandle(new CreateParams());
+        // a real (hidden) top-level window, so "taskkill" and Windows shutdown can ask us to close politely
+        CreateHandle(new CreateParams { Caption = "FreeFlowHidden", Style = 0, ExStyle = 0x80 /*TOOLWINDOW*/ });
         Register();
         Settings.Changed += Register;
     }
@@ -148,6 +149,9 @@ sealed class HotkeyWindow : NativeWindow, IDisposable
 
     protected override void WndProc(ref Message m)
     {
+        // installer / Task Manager "End task" / Windows shutting down → exit cleanly so the tray icon is removed
+        const int WM_CLOSE = 0x10, WM_ENDSESSION = 0x16;
+        if (m.Msg == WM_CLOSE || (m.Msg == WM_ENDSESSION && m.WParam != IntPtr.Zero)) { Quit?.Invoke(); return; }
         if (m.Msg == Native.WM_HOTKEY)
         {
             if (m.WParam == (IntPtr)1) Toggle?.Invoke();

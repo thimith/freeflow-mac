@@ -43,6 +43,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\FreeFlow.exe"; Description: "Launch FreeFlow now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{sys}\taskkill.exe"; Parameters: "/IM FreeFlow.exe"; Flags: runhidden; RunOnceId: "CloseApp"
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM FreeFlow.exe"; Flags: runhidden; RunOnceId: "KillApp"
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM whisper-server.exe"; Flags: runhidden; RunOnceId: "KillWhisper"
 
@@ -50,6 +51,9 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM whisper-server.exe"; Flags: 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var Code: Integer;
 begin
+  { ask FreeFlow to close politely first (removes its tray icon), then make sure it's gone }
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM FreeFlow.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Sleep(1500);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM FreeFlow.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM whisper-server.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Result := '';

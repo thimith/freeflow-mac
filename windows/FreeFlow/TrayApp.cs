@@ -69,6 +69,8 @@ sealed class TrayApp : ApplicationContext
         hook.Install();
         hotkeys.Toggle = ToggleHandsFree;
         hotkeys.PasteLast = PasteLast;
+        hotkeys.Quit = Quit;
+        Application.ApplicationExit += (_, _) => { try { tray.Visible = false; } catch { } };
         hotkeys.Translate = () => translateBar.ShowMenu();
         translateBar.OnTranslate = RunTranslate;
         translateBar.OnImprove = ImproveByVoice;
@@ -414,8 +416,12 @@ sealed class TrayApp : ApplicationContext
         historyForm.Activate();
     }
 
+    bool quitting;
+
     void Quit()
     {
+        if (quitting) return;
+        quitting = true;
         tray.Visible = false;
         hook.Dispose();
         hotkeys.Dispose();

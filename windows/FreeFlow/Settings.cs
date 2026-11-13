@@ -119,15 +119,17 @@ public sealed class Settings
     public int DockY { get; set; } = -1;
     public string[] QuickLangs { get; set; } = { "es-CO", "en-US", "fr-FR", "" };
 
-    [JsonIgnore] public static bool IsFirstRun { get; private set; }
-    [JsonIgnore] public static Settings Current { get; } = Load();
-    public static event Action Changed;
-
+    // NOTE: must be declared before Current — static fields initialise in order, and Load() needs it.
     static readonly JsonSerializerOptions Opts = new()
     {
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter() },
     };
+
+    [JsonIgnore] public static bool IsFirstRun { get; private set; }
+    [JsonIgnore] public static Settings Current { get; } = Load();
+    public static event Action Changed;
+
 
     static string FilePath => Path.Combine(Paths.AppData, "settings.json");
 
@@ -147,7 +149,13 @@ public sealed class Settings
                 return loaded;
             }
         }
-        catch { /* corrupted file → defaults */ }
+        catch (Exception ex)
+        {
+            // never silently wipe your settings: keep the unreadable file aside and log why
+            try { File.Copy(FilePath, Path.Combine(Paths.AppData, "settings.unreadable.json"), true); } catch { }
+            Program.Log(ex);
+            return new Settings { DefaultsVersion = 2 };
+        }
         IsFirstRun = true;
         return new Settings { DefaultsVersion = 2 };
     }

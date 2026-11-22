@@ -297,7 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startRecording(as newState: RecState) -> Bool {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             AVCaptureDevice.requestAccess(for: .audio) { _ in }
-            overlay.flash("Allow microphone access in Settings → Permissions")
+            overlay.error("Allow microphone access in Settings → Permissions")
             Feedback.error()
             return false
         }
@@ -307,7 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             recordingURL = try recorder.start()
         } catch {
-            overlay.flash(error.localizedDescription)
+            overlay.error("Microphone: " + error.localizedDescription, detail: error)
             Feedback.error()
             return false
         }
@@ -434,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard !Task.isCancelled else { return }
             finishIdle()
             Feedback.error()
-            overlay.flash(error.localizedDescription)
+            overlay.error(error.localizedDescription, detail: error)
         }
     }
 
@@ -463,7 +463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         case .copiedOnly(let why):
             Feedback.error()
-            overlay.flash(why)
+            overlay.error(why)
             if !AXIsProcessTrusted() { openSettings() }
         }
     }
@@ -473,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func runTranslate(_ lang: TLang) {
         guard state == .idle else { return }
         guard AXIsProcessTrusted() else {
-            overlay.flash("Allow Accessibility in Settings → Permissions")
+            overlay.error("Allow Accessibility in Settings → Permissions")
             return
         }
         guard let text = TextInserter.selectionOrWholeField(),
@@ -490,13 +490,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 let out = try await Translator.translate(text, to: lang)
                 self.finishIdle()
-                if case .copiedOnly(let why) = TextInserter.insert(out) { self.overlay.flash(why); return }
+                if case .copiedOnly(let why) = TextInserter.insert(out) { self.overlay.error(why); return }
                 self.lastText = out
                 self.overlay.set(.done("\(lang.flag) " + String(format: "%.1fs", Date().timeIntervalSince(t0))))
             } catch {
                 self.finishIdle()
                 Feedback.error()
-                self.overlay.flash(error.localizedDescription)
+                self.overlay.error("Translation: " + error.localizedDescription, detail: error)
             }
         }
     }
@@ -527,6 +527,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             overlay.flash("Nothing dictated yet")
             return
         }
-        if case .copiedOnly(let why) = TextInserter.insert(t) { overlay.flash(why) }
+        if case .copiedOnly(let why) = TextInserter.insert(t) { overlay.error(why) }
     }
 }

@@ -12,6 +12,7 @@ struct SettingsView: View {
             AITab().tabItem { Label("AI Polish", systemImage: "sparkles") }
             WordsTab().tabItem { Label("Dictionary", systemImage: "character.book.closed") }
             PermissionsTab().tabItem { Label("Permissions", systemImage: "lock.shield") }
+            ErrorsTab().tabItem { Label("Errors", systemImage: "exclamationmark.triangle") }
         }
         .frame(width: 680, height: 600)
     }
@@ -39,6 +40,7 @@ struct GeneralTab: View {
     @AppStorage(K.muteMedia) private var mute = false
     @AppStorage(K.showOverlay) private var overlay = true
     @AppStorage(K.silenceDetection) private var silence = true
+    @AppStorage(K.bubblePlace) private var place: BubblePlace = .topCenter
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
@@ -89,6 +91,10 @@ struct GeneralTab: View {
                 Toggle("Play start / stop sounds", isOn: $sounds)
                 Toggle("Mute system audio while dictating", isOn: $mute)
                 Toggle("Show the floating recording pill", isOn: $overlay)
+                Picker("Bubble position", selection: $place) {
+                    ForEach(BubblePlace.allCases) { Text($0.label).tag($0) }
+                }
+                caption("Where the recording pill and the 文A Translate button appear. Takes effect the next time you dictate.")
                 Toggle("Ignore recordings with no speech", isOn: $silence)
             }
 
@@ -428,4 +434,43 @@ struct PermissionsTab: View {
         try? p.run()
         NSApp.terminate(nil)
     }
+}
+
+// MARK: - Errors
+
+struct ErrorsTab: View {
+    @State private var entries: [String] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            caption("Every error FreeFlow showed you, newest first. Copy it and send it over if something keeps failing.")
+            ScrollView {
+                Text(entries.isEmpty ? "No errors so far. 🎉" : entries.joined(separator: "\n\n"))
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.25)))
+            HStack {
+                Button("Refresh") { load() }
+                Button("Copy all") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(entries.joined(separator: "\n\n"), forType: .string)
+                }
+                .disabled(entries.isEmpty)
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([ErrorLog.url]) }
+                    .disabled(entries.isEmpty)
+                Spacer()
+                Button("Clear") { ErrorLog.clear(); load() }
+                    .disabled(entries.isEmpty)
+            }
+        }
+        .padding(20)
+        .onAppear(perform: load)
+        .onReceive(NotificationCenter.default.publisher(for: ErrorLog.changed)) { _ in load() }
+    }
+
+    private func load() { entries = ErrorLog.recent() }
 }

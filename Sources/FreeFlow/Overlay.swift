@@ -24,7 +24,7 @@ final class OverlayModel: ObservableObject {
     }
 }
 
-/// The floating "pill" at the bottom of the screen. Never steals focus, ignores the mouse.
+/// The floating "pill" (top centre by default — see Settings → General → Bubble position). Never steals focus, ignores the mouse.
 final class OverlayController {
     let model = OverlayModel()
     private var hideWork: DispatchWorkItem?
@@ -52,7 +52,7 @@ final class OverlayController {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let vf = screen?.visibleFrame else { return }
-        panel.setFrameOrigin(NSPoint(x: vf.midX - panel.frame.width / 2, y: vf.minY + 24))
+        panel.setFrame(Prefs.bubblePlace.frame(for: panel.frame.size, in: vf, margin: 10), display: true)
     }
 
     func show(_ phase: OverlayModel.Phase) {
@@ -81,6 +81,15 @@ final class OverlayController {
     }
 
     func flash(_ message: String) { set(.message(message)) }
+
+    /// Show an error in the pill AND keep it in the error log (Settings → Errors), so it can be read after it fades.
+    func error(_ message: String, detail: Error? = nil) {
+        ErrorLog.add(message, detail: detail.map { String(describing: $0) })
+        set(.message(message))
+        // errors stay up a little longer than other messages
+        hideWork?.cancel()
+        scheduleHide(after: 4.5)
+    }
 
     private func scheduleHide(after s: TimeInterval) {
         let w = DispatchWorkItem { [weak self] in self?.hide() }
@@ -115,7 +124,7 @@ struct OverlayView: View {
         .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
         .foregroundColor(.white)
         .font(.system(size: 12, weight: .medium))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Prefs.bubblePlace.alignment)
         .animation(.easeInOut(duration: 0.15), value: model.phase)
     }
 

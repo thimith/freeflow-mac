@@ -77,7 +77,7 @@ final class TranslateBar {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         let vf = screen?.visibleFrame ?? .zero
-        p.setFrame(NSRect(x: vf.midX - size.width / 2, y: vf.minY + 24, width: size.width, height: size.height), display: true)
+        p.setFrame(Prefs.bubblePlace.frame(for: size, in: vf, margin: 22), display: true)
         p.orderFrontRegardless()
     }
 
@@ -119,7 +119,7 @@ struct TranslateBarView: View {
             case .all: allLanguages
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Prefs.bubblePlace.isTop ? .top : .bottom)
     }
 
     private var compact: some View {

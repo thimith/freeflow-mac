@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import SwiftUI
 import Carbon.HIToolbox
 
 // MARK: - Option enums
@@ -97,6 +99,42 @@ enum InsertMethod: String, CaseIterable, Identifiable {
     var label: String { self == .paste ? "Paste (fast, recommended)" : "Simulate typing (for apps that block paste)" }
 }
 
+/// Where the recording pill (and the 文A Translate button after it) appears on screen.
+enum BubblePlace: String, CaseIterable, Identifiable {
+    case topCenter, topLeft, topRight, bottomCenter, bottomLeft, bottomRight, left, right
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .topCenter: return "Top centre (default)"
+        case .topLeft: return "Top left"
+        case .topRight: return "Top right"
+        case .bottomCenter: return "Bottom centre"
+        case .bottomLeft: return "Bottom left"
+        case .bottomRight: return "Bottom right"
+        case .left: return "Left side (middle)"
+        case .right: return "Right side (middle)"
+        }
+    }
+    var isTop: Bool { self == .topCenter || self == .topLeft || self == .topRight }
+    var isBottom: Bool { self == .bottomCenter || self == .bottomLeft || self == .bottomRight }
+    var isLeading: Bool { self == .topLeft || self == .bottomLeft || self == .left }
+    var isTrailing: Bool { self == .topRight || self == .bottomRight || self == .right }
+
+    /// Content alignment inside the (wider than the pill) panel, so the pill hugs the chosen edge.
+    var alignment: Alignment {
+        let v: VerticalAlignment = isTop ? .top : isBottom ? .bottom : .center
+        let h: HorizontalAlignment = isLeading ? .leading : isTrailing ? .trailing : .center
+        return Alignment(horizontal: h, vertical: v)
+    }
+
+    /// Frame for a panel of `size` on the visible area of a screen (below the menu bar, above the Dock).
+    func frame(for size: NSSize, in vf: NSRect, margin: CGFloat = 14) -> NSRect {
+        let x: CGFloat = isLeading ? vf.minX + margin : isTrailing ? vf.maxX - size.width - margin : vf.midX - size.width / 2
+        let y: CGFloat = isTop ? vf.maxY - size.height - margin : isBottom ? vf.minY + margin : vf.midY - size.height / 2
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+}
+
 // MARK: - Keys
 
 enum K {
@@ -132,6 +170,7 @@ enum K {
     static let quickLangs = "quickLangs"
     static let translateCombo = "translateCombo"
     static let translateAfterDictation = "translateAfterDictation"
+    static let bubblePlace = "bubblePlace"
 }
 
 // MARK: - Typed accessors
@@ -172,6 +211,7 @@ enum Prefs {
             K.quickLangs: "es-CO,en-US,fr-FR,",
             K.translateCombo: KeyCombo.controlOptionT.rawValue,
             K.translateAfterDictation: true,
+            K.bubblePlace: BubblePlace.topCenter.rawValue,
         ])
     }
 
@@ -207,6 +247,7 @@ enum Prefs {
     static var silenceDetection: Bool { d.bool(forKey: K.silenceDetection) }
     static var translateCombo: KeyCombo { KeyCombo(rawValue: str(K.translateCombo)) ?? .none }
     static var translateAfterDictation: Bool { d.bool(forKey: K.translateAfterDictation) }
+    static var bubblePlace: BubblePlace { BubblePlace(rawValue: str(K.bubblePlace)) ?? .topCenter }
 
     /// Four quick translation slots ("" = empty).
     static var quickLangs: [String] {
@@ -305,6 +346,57 @@ enum FFError: LocalizedError {
     case message(String)
     var errorDescription: String? {
         switch self { case .message(let m): return m }
+    }
+}
+
+/// Errors FreeFlow showed you, kept in ~/Library/Application Support/FreeFlow/error.log (Settings → Errors).
+enum ErrorLog {
+    static var url: URL { AppPaths.support.appendingPathComponent("error.log") }
+    private static let queue = DispatchQueue(label: "freeflow.errorlog")
+    private static let stamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+    static let changed = Notification.Name("FreeFlowErrorLogChanged")
+
+    static func add(_ message: String, detail: String? = nil) {
+        let m = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !m.isEmpty else { return }
+        var entry = "[\(stamp.string(from: Date()))] \(m)"
+        if let detail, !detail.isEmpty, detail != m { entry += "\n" + detail }
+        queue.async {
+            let u = url
+            let data = Data((entry + "\n\n").utf8)
+            if let h = try? FileHandle(forWritingTo: u) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: u)
+            }
+            // keep it small: past ~1 MB, keep only the newest ~200 KB
+            if let size = (try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? Int), size > 1_000_000,
+               let all = try? String(contentsOf: u, encoding: .utf8) {
+                var tail = String(all.suffix(200_000))
+                if let r = tail.range(of: "\n\n[") { tail = String(tail[r.upperBound...]); tail = "[" + tail }
+                try? tail.write(to: u, atomically: true, encoding: .utf8)
+            }
+            DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) }
+        }
+    }
+
+    /// Newest first.
+    static func recent(max: Int = 50) -> [String] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let parts = text.components(separatedBy: "\n\n[").enumerated().map { i, p -> String in
+            let t = (i == 0 && p.hasPrefix("[")) ? p : "[" + p
+            return t.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { $0.count > 1 }
+        return Array(parts.reversed().prefix(max))
+    }
+
+    static func clear() {
+        queue.sync { try? FileManager.default.removeItem(at: url) }
+        NotificationCenter.default.post(name: changed, object: nil)
     }
 }
 

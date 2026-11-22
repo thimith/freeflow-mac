@@ -453,7 +453,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         finishIdle()
         switch result {
         case .inserted:
-            overlay.set(.done(String(format: "%.1fs", sttTime + aiTime)))
+            let copyable = mode == .dictation ? text : nil
+            if mode == .dictation && Prefs.translateAfterDictation {
+                // the 文A Translate button takes over after 1 s and carries the Copy button
+                overlay.set(.done(String(format: "%.1fs", sttTime + aiTime)))
+                translateBar.copyText = copyable
+            } else {
+                overlay.done(String(format: "%.1fs", sttTime + aiTime), copy: copyable)
+            }
             if mode == .dictation && Prefs.translateAfterDictation {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     guard let self, self.state == .idle else { return }

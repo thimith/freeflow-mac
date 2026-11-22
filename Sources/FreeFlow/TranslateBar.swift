@@ -14,12 +14,16 @@ final class FirstMouseHostingView<V: View>: NSHostingView<V> {
 final class TranslateBarModel: ObservableObject {
     enum Mode { case compact, menu, all }
     @Published var mode: Mode = .compact
+    @Published var canCopy = false
+    @Published var copied = false
 }
 
 /// "文A Translate" button that appears for 5 s after each dictation, and the language card it opens.
 final class TranslateBar {
     var onTranslate: ((TLang) -> Void)?
     var onImprove: (() -> Void)?
+    /// What the Copy button next to "文A Translate" copies (your last dictation).
+    var copyText: String? { didSet { model.copied = false; model.canCopy = copyText != nil } }
 
     private let model = TranslateBarModel()
     private var panel: ClickPanel?
@@ -31,7 +35,7 @@ final class TranslateBar {
     /// The small pill, auto-hides after 5 seconds.
     func showCompact() {
         model.mode = .compact
-        present(size: NSSize(width: 150, height: 44))
+        present(size: NSSize(width: model.canCopy ? 250 : 150, height: 44))
         scheduleHide(after: 5)
     }
 
@@ -96,7 +100,13 @@ final class TranslateBar {
                                     expand: { [weak self] in self?.showMenu() },
                                     more: { [weak self] in self?.showAll() },
                                     pick: { [weak self] lang in self?.hide(); self?.onTranslate?(lang) },
-                                    improve: { [weak self] in self?.hide(); self?.onImprove?() })
+                                    improve: { [weak self] in self?.hide(); self?.onImprove?() },
+                                    copy: { [weak self] in
+                                        guard let self, let text = self.copyText else { return }
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(text, forType: .string)
+                                        self.model.copied = true
+                                    })
         let host = FirstMouseHostingView(rootView: view)
         host.autoresizingMask = [.width, .height]
         p.contentView = host
@@ -110,6 +120,7 @@ struct TranslateBarView: View {
     let more: () -> Void
     let pick: (TLang) -> Void
     let improve: () -> Void
+    let copy: () -> Void
 
     var body: some View {
         Group {
@@ -123,6 +134,29 @@ struct TranslateBarView: View {
     }
 
     private var compact: some View {
+        HStack(spacing: 8) {
+            translateButton
+            if model.canCopy { copyButton }
+        }
+    }
+
+    private var copyButton: some View {
+        Button(action: copy) {
+            HStack(spacing: 6) {
+                Image(systemName: model.copied ? "checkmark" : "doc.on.doc").font(.system(size: 12, weight: .bold))
+                Text(model.copied ? "Copied" : "Copy").font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(Capsule().fill(Color(red: 0.19, green: 0.19, blue: 0.23)))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var translateButton: some View {
         Button(action: expand) {
             HStack(spacing: 8) {
                 Text("文A").font(.system(size: 14, weight: .heavy))

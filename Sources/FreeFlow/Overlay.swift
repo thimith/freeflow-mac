@@ -10,6 +10,16 @@ final class OverlayModel: ObservableObject {
     @Published var phase: Phase = .listening
     @Published var levels: [CGFloat] = Array(repeating: 0, count: OverlayModel.barCount)
     @Published var startDate = Date()
+    /// What the Copy button on the "Inserted" pill copies (nil = no button).
+    @Published var copyText: String?
+    @Published var copied = false
+
+    func copy() {
+        guard let t = copyText else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(t, forType: .string)
+        copied = true
+    }
 
     func push(level: Float) {
         var l = levels
@@ -31,7 +41,7 @@ final class OverlayController {
     private lazy var panel: NSPanel = makePanel()
 
     private func makePanel() -> NSPanel {
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 64),
+        let p = ClickPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 64),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.isFloatingPanel = true
         p.level = .statusBar
@@ -41,7 +51,7 @@ final class OverlayController {
         p.ignoresMouseEvents = true
         p.hidesOnDeactivate = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        let host = NSHostingView(rootView: OverlayView(model: model))
+        let host = FirstMouseHostingView(rootView: OverlayView(model: model))
         host.frame = NSRect(x: 0, y: 0, width: 360, height: 64)
         host.autoresizingMask = [.width, .height]
         p.contentView = host
@@ -58,6 +68,8 @@ final class OverlayController {
     func show(_ phase: OverlayModel.Phase) {
         hideWork?.cancel()
         model.reset()
+        model.copyText = nil
+        panel.ignoresMouseEvents = true
         model.phase = phase
         guard Prefs.showOverlay else { return }
         position()
@@ -68,19 +80,29 @@ final class OverlayController {
     func set(_ phase: OverlayModel.Phase) {
         hideWork?.cancel()
         model.phase = phase
+        if case .done = phase {} else { model.copyText = nil }
+        model.copied = false
+        // clickable only while it shows the Copy button; otherwise clicks go straight through
+        panel.ignoresMouseEvents = model.copyText == nil
         if Prefs.showOverlay && !panel.isVisible {
             position()
             panel.alphaValue = 1
             panel.orderFrontRegardless()
         }
         switch phase {
-        case .done: scheduleHide(after: 1.1)
+        case .done: scheduleHide(after: model.copyText == nil ? 1.1 : 5)
         case .message: scheduleHide(after: 2.4)
         default: break
         }
     }
 
     func flash(_ message: String) { set(.message(message)) }
+
+    /// "✓ Inserted · 1.2s  [Copy]" — stays up 5 s so you can copy what you just dictated.
+    func done(_ timing: String, copy text: String?) {
+        model.copyText = text
+        set(.done(timing))
+    }
 
     /// Show an error in the pill AND keep it in the error log (Settings → Errors), so it can be read after it fades.
     func error(_ message: String, detail: Error? = nil) {
@@ -159,7 +181,21 @@ struct OverlayView: View {
         case .polishing: Text("Polishing…")
         case .thinking: Text("Thinking…")
         case .translating: Text("Translating…")
-        case .done(let t): Text("Inserted · \(t)")
+        case .done(let t):
+            Text("Inserted · \(t)")
+            if model.copyText != nil {
+                Button(action: { model.copy() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: model.copied ? "checkmark" : "doc.on.doc").font(.system(size: 10, weight: .bold))
+                        Text(model.copied ? "Copied" : "Copy").font(.system(size: 11, weight: .semibold))
+                    }
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)
+                    .background(Capsule().fill(Color.white.opacity(model.copied ? 0.28 : 0.16)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         case .message(let m): Text(m).lineLimit(1).frame(maxWidth: 280)
         }
     }

@@ -216,27 +216,48 @@ sealed class DockBar : LayeredWindow
 
     int CompactWidth => Pad + MicD + (ShowTranslate ? Gap + ChipD : 0) + Gap + ChipD + Pad + D(2);
 
-    /// Top-left of the compact bubble (saved when you drag it).
+    /// Top-left of the compact bubble: from the placement picked in Settings, or where you dropped it.
     Point Origin
     {
         get
         {
             var s = Settings.Current;
             var wa = Screen.PrimaryScreen.WorkingArea;
-            var def = new Point(wa.Right - CompactWidth - D(24), wa.Bottom - H - D(24));
-            var p = s.DockX >= 0 ? new Point(s.DockX, s.DockY) : def;
-            if (!Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(new Rectangle(p, new Size(CompactWidth, H))))) p = def;
-            return p;
+            int edge = D(14), cw = CompactWidth;
+            int left = wa.Left + edge, right = wa.Right - cw - edge, midX = wa.Left + (wa.Width - cw) / 2;
+            int top = wa.Top + edge, bottom = wa.Bottom - H - edge, midY = wa.Top + (wa.Height - H) / 2;
+            Point Preset(DockPlace p) => p switch
+            {
+                DockPlace.TopLeft => new Point(left, top),
+                DockPlace.TopRight => new Point(right, top),
+                DockPlace.BottomCenter => new Point(midX, bottom),
+                DockPlace.BottomLeft => new Point(left, bottom),
+                DockPlace.BottomRight => new Point(right, bottom),
+                DockPlace.Left => new Point(left, midY),
+                DockPlace.Right => new Point(right, midY),
+                _ => new Point(midX, top),
+            };
+            if (s.DockPlacement != DockPlace.Custom || s.DockX < 0) return Preset(s.DockPlacement == DockPlace.Custom ? DockPlace.TopCenter : s.DockPlacement);
+            var pt = new Point(s.DockX, s.DockY);
+            if (!Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(new Rectangle(pt, new Size(cw, H))))) pt = Preset(DockPlace.TopCenter);
+            return pt;
         }
     }
 
-    bool GrowLeft
+    enum Grow { Right, Left, Centre }
+
+    /// Which way the bubble opens when it grows: away from the screen edge it's pinned to, or evenly when centred.
+    Grow Growth
     {
         get
         {
+            var p = Settings.Current.DockPlacement;
+            if (p is DockPlace.TopCenter or DockPlace.BottomCenter && !dragging) return Grow.Centre;
+            if (p is DockPlace.TopLeft or DockPlace.BottomLeft or DockPlace.Left) return Grow.Right;
+            if (p is DockPlace.TopRight or DockPlace.BottomRight or DockPlace.Right) return Grow.Left;
             var o = Origin;
             var wa = Screen.FromPoint(o).WorkingArea;
-            return o.X + CompactWidth / 2 > wa.Left + wa.Width / 2;
+            return o.X + CompactWidth / 2 > wa.Left + wa.Width / 2 ? Grow.Left : Grow.Right;
         }
     }
 
@@ -247,7 +268,12 @@ sealed class DockBar : LayeredWindow
         {
             var o = Origin;
             int w = (int)Math.Ceiling(Math.Max(curW < 0 ? TargetWidth() : curW, MicD + 2 * Pad));
-            int x = GrowLeft ? o.X + CompactWidth - w : o.X;
+            int x = Growth switch
+            {
+                Grow.Left => o.X + CompactWidth - w,
+                Grow.Centre => o.X + CompactWidth / 2 - w / 2,
+                _ => o.X,
+            };
             var wa = Screen.FromPoint(o).WorkingArea;
             x = Math.Clamp(x, wa.Left, Math.Max(wa.Left, wa.Right - w));
             return new Rectangle(x, o.Y, w, H);
@@ -309,7 +335,8 @@ sealed class DockBar : LayeredWindow
 
         // content is laid out for the final width and pinned to the bubble's fixed edge while the capsule springs
         float target = TargetWidth();
-        float dx = GrowLeft ? body.Width - target : 0;
+        var grow = Growth;
+        float dx = grow == Grow.Left ? body.Width - target : grow == Grow.Centre ? (body.Width - target) / 2 : 0;
         var clip = g.Save();
         var inner = RectangleF.Inflate(body, -D(2), -D(2));
         using (var cp = Capsule(inner)) g.SetClip(cp);
@@ -452,6 +479,7 @@ sealed class DockBar : LayeredWindow
         if (dragging)
         {
             var s = Settings.Current;
+            s.DockPlacement = DockPlace.Custom;
             s.DockX = downOrigin.X + (c.X - downScreen.X);
             s.DockY = downOrigin.Y + (c.Y - downScreen.Y);
             Redraw();

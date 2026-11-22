@@ -8,6 +8,8 @@ public enum Combo { None, CtrlAltSpace, CtrlShiftSpace, AltShiftSpace, CtrlAltV,
 public enum SttProvider { Groq, LocalWhisper, Custom }
 public enum AiProvider { Off, Ollama, Groq, Custom }
 public enum InsertMethod { Paste, Type }
+/// Where the floating bubble sits. Dragging it switches to Custom (exactly where you dropped it).
+public enum DockPlace { TopCenter, TopLeft, TopRight, BottomCenter, BottomLeft, BottomRight, Left, Right, Custom }
 
 public static class Labels
 {
@@ -55,6 +57,19 @@ public static class Labels
         AiProvider.Custom => "Custom OpenAI-compatible API",
         _ => p.ToString(),
     };
+    public static string Of(DockPlace p) => p switch
+    {
+        DockPlace.TopCenter => "Top centre (default)",
+        DockPlace.TopLeft => "Top left",
+        DockPlace.TopRight => "Top right",
+        DockPlace.BottomCenter => "Bottom centre",
+        DockPlace.BottomLeft => "Bottom left",
+        DockPlace.BottomRight => "Bottom right",
+        DockPlace.Left => "Left side (middle)",
+        DockPlace.Right => "Right side (middle)",
+        DockPlace.Custom => "Where I drag it",
+        _ => p.ToString(),
+    };
     public static string Of(InsertMethod m) => m == InsertMethod.Paste
         ? "Paste (fast, recommended)" : "Simulate typing (for apps that block paste)";
 
@@ -85,7 +100,7 @@ public sealed class Settings
     public Combo ToggleCombo { get; set; } = Combo.CtrlAltSpace;
     public Combo PasteCombo { get; set; } = Combo.CtrlAltV;
     public SttProvider Stt { get; set; } = SttProvider.Groq;
-    /// Bumped when defaults change for existing installs (2 = Groq becomes the speech engine).
+    /// Bumped when defaults change for existing installs (2 = Groq becomes the speech engine, 3 = bubble at the top).
     public int DefaultsVersion { get; set; }
     public AiProvider Ai { get; set; } = AiProvider.Off;
     public string WhisperModel { get; set; } = "large-v3-turbo-q5_0";
@@ -115,6 +130,7 @@ public sealed class Settings
     public Combo TranslateCombo { get; set; } = Combo.CtrlAltT;
     public bool TranslateAfterDictation { get; set; } = true;
     public bool ShowDock { get; set; } = true;
+    public DockPlace DockPlacement { get; set; } = DockPlace.TopCenter;
     public int DockX { get; set; } = -1;
     public int DockY { get; set; } = -1;
     public string[] QuickLangs { get; set; } = { "es-CO", "en-US", "fr-FR", "" };
@@ -140,12 +156,22 @@ public sealed class Settings
             if (File.Exists(FilePath))
             {
                 var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Opts) ?? new Settings();
+                bool migrated = false;
                 if (loaded.DefaultsVersion < 2)
                 {
                     loaded.Stt = SttProvider.Groq;   // Groq is now the default speech engine
                     loaded.DefaultsVersion = 2;
-                    try { File.WriteAllText(FilePath, JsonSerializer.Serialize(loaded, Opts)); } catch { }
+                    migrated = true;
                 }
+                if (loaded.DefaultsVersion < 3)
+                {
+                    // the bubble moves to the top of the screen so it no longer covers what you're typing
+                    loaded.DockPlacement = DockPlace.TopCenter;
+                    loaded.DockX = -1; loaded.DockY = -1;
+                    loaded.DefaultsVersion = 3;
+                    migrated = true;
+                }
+                if (migrated) { try { File.WriteAllText(FilePath, JsonSerializer.Serialize(loaded, Opts)); } catch { } }
                 return loaded;
             }
         }
@@ -154,10 +180,10 @@ public sealed class Settings
             // never silently wipe your settings: keep the unreadable file aside and log why
             try { File.Copy(FilePath, Path.Combine(Paths.AppData, "settings.unreadable.json"), true); } catch { }
             Program.Log(ex);
-            return new Settings { DefaultsVersion = 2 };
+            return new Settings { DefaultsVersion = 3 };
         }
         IsFirstRun = true;
-        return new Settings { DefaultsVersion = 2 };
+        return new Settings { DefaultsVersion = 3 };
     }
 
     public void Save()

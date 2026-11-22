@@ -184,7 +184,7 @@ sealed class TrayApp : ApplicationContext
         try { wavPath = recorder.Start(); }
         catch (Exception ex)
         {
-            overlay.Flash("Microphone error: " + ex.Message);
+            overlay.Error("Microphone error: " + ex.Message);
             Feedback.Error();
             return false;
         }
@@ -300,8 +300,9 @@ sealed class TrayApp : ApplicationContext
             if (ct.IsCancellationRequested) return;
             FinishIdle();
             Feedback.Error();
-            overlay.Flash(ex is FFException ? ex.Message : "Error: " + ex.Message);
-            Program.Log(ex);
+            var shown = ex is FFException ? ex.Message : "Error: " + ex.Message;
+            overlay.Flash(shown);
+            Program.Log(ex);   // full details (the message plus where it happened)
         }
         finally { TryDelete(path); }
     }
@@ -323,7 +324,7 @@ sealed class TrayApp : ApplicationContext
         {
             overlay.Set(Phase.Done, $"{stt + ai:0.0}s");
         }
-        else { Feedback.Error(); overlay.Flash(why); }
+        else { Feedback.Error(); overlay.Error("Couldn't insert the text: " + why); }
     }
 
     // ───────── translate & improve by voice ─────────
@@ -347,7 +348,7 @@ sealed class TrayApp : ApplicationContext
             var (ok, why) = Inserter.Insert(outp);
             lastText = outp;
             if (ok) overlay.Set(Phase.Done, $"{lang.Short} · {(DateTime.Now - t0).TotalSeconds:0.0}s");
-            else overlay.Flash(why);
+            else overlay.Error("Couldn't insert the translation: " + why);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -387,7 +388,7 @@ sealed class TrayApp : ApplicationContext
         var t = lastText ?? HistoryStore.Shared.Entries.FirstOrDefault()?.Text;
         if (t == null) { overlay.Flash("Nothing dictated yet"); return; }
         var (ok, why) = Inserter.Insert(t);
-        if (!ok) overlay.Flash(why);
+        if (!ok) overlay.Error("Couldn't paste: " + why);
     }
 
     static void TryDelete(string p) { try { if (p != null && File.Exists(p)) File.Delete(p); } catch { } }

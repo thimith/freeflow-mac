@@ -218,7 +218,15 @@ sealed class SettingsForm : Form
         bub.Controls.Add(Check("Show the floating bubble (drag it anywhere · click the mic to dictate)", s.ShowDock, v => s.ShowDock = v));
         bub.Controls.Add(Check("Show the 文A translate button", s.TranslateAfterDictation, v => s.TranslateAfterDictation = v));
         bub.Controls.Add(Note("📋 next to it shows your last 5 dictations — click one to copy it."));
-        bub.Controls.Add(Btn("Move the bubble back to the corner", () => { s.DockX = -1; s.DockY = -1; s.Save(); }));
+        ComboBox place = null;
+        place = Pick(Enum.GetValues<DockPlace>(), s.DockPlacement, Labels.Of, v => { s.DockPlacement = v; if (v != DockPlace.Custom) { s.DockX = -1; s.DockY = -1; } });
+        bub.Controls.Add(Row("Position on screen", place));
+        bub.Controls.Add(Note("Dragging the bubble switches this to “Where I drag it”. It also shows while you dictate when the always-on bubble is turned off."));
+        bub.Controls.Add(Btn("Move the bubble back to the top", () =>
+        {
+            s.DockPlacement = DockPlace.TopCenter; s.DockX = -1; s.DockY = -1; s.Save();
+            place.SelectedIndex = Array.IndexOf(Enum.GetValues<DockPlace>(), DockPlace.TopCenter);
+        }));
 
         var lang = Card(page, "Microphone & language");
         var mics = new List<int> { -1 };
@@ -438,6 +446,28 @@ sealed class SettingsForm : Form
         tr.Controls.Add(Note("• Slow? Check the timings in History. High “voice” → Groq is the fastest engine. High “AI” → turn AI Polish off."));
         tr.Controls.Add(Btn("Open FreeFlow data folder", () => Program.Open(Paths.AppData)));
         tr.Controls.Add(Note($"Version {Application.ProductVersion}"));
+
+        var log = Card(page, "Error log", "Every error FreeFlow showed you, newest first, with the technical details. Copy it and send it over if something keeps failing.");
+        var box = new TextBox
+        {
+            Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false,
+            Width = 600, Height = 260, Font = new Font("Consolas", 9f), Tag = "full", BackColor = Color.White,
+        };
+        void LoadLog()
+        {
+            var errs = Program.RecentErrors();
+            box.Text = errs.Count == 0 ? "No errors so far. 🎉" : string.Join("\r\n\r\n", errs).Replace("\r\n", "\n").Replace("\n", "\r\n");
+            box.SelectionStart = 0; box.SelectionLength = 0;
+        }
+        LoadLog();
+        page.Tab.VisibleChanged += (_, _) => { if (page.Tab.Visible) LoadLog(); };
+        log.Controls.Add(box);
+        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 6, 0, 0) };
+        buttons.Controls.Add(Btn("Refresh", LoadLog));
+        buttons.Controls.Add(Btn("Copy all", () => { try { Clipboard.SetText(box.Text.Length > 0 ? box.Text : " "); } catch { } }));
+        buttons.Controls.Add(Btn("Open log file", () => { if (File.Exists(Program.ErrorLogPath)) Program.Open(Program.ErrorLogPath); }));
+        buttons.Controls.Add(Btn("Clear", () => { Program.ClearErrors(); LoadLog(); }));
+        log.Controls.Add(buttons);
         return page.Tab;
     }
 }

@@ -18,5 +18,11 @@ sealed class Overlay
     public void ShowPhase(Phase p) => Safe(() => Dock?.ShowPhase(p));
     public void Set(Phase p, string msg = "") => Safe(() => Dock?.SetPhase(p, msg));
     public void Flash(string message) => Safe(() => Dock?.SetPhase(Phase.Message, message));
+    /// Show an error in the bubble AND keep it in the error log (Settings → Help → Error log).
+    public void Error(string message)
+    {
+        Program.LogError(message);
+        Flash(message);
+    }
     public void HidePill() => Safe(() => Dock?.GoIdle());
 }

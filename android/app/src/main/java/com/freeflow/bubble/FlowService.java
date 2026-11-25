@@ -82,7 +82,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent e) {
         h.removeCallbacks(refreshTask);
-        h.postDelayed(refreshTask, 120);
+        h.postDelayed(refreshTask, 200);
     }
 
     @Override public void onInterrupt() { }
@@ -133,6 +133,20 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
             }
         } catch (Exception ignored) { }
         return null;
+    }
+
+    /** True if {@code t} is still the field that has input focus (you haven't moved to another field or app). */
+    private boolean stillFocused(TextTarget t) {
+        if (t == null || !t.alive()) return false;
+        AccessibilityNodeInfo now = focusedEditable();
+        return now != null && now.equals(t.node);
+    }
+
+    private void copyToClipboard(String s) {
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("FreeFlow", s));
+        } catch (Exception ignored) { }
     }
 
     private boolean keyboardVisible() {
@@ -470,6 +484,13 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
                     busy = false;
                     hideCancel();
                     boolean ok;
+                    if (!stillFocused(t)) {
+                        // you switched field or app while it was transcribing: don't touch that field, hand you the text instead
+                        copyToClipboard(out);
+                        error("Field changed — text is on your clipboard");
+                        refresh();
+                        return;
+                    }
                     if (m == Mode.EDIT) {
                         rememberUndo(t);
                         ok = t.replaceSelectedOrAll(this, out);
@@ -653,6 +674,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
                 String out = Groq.translate(prefs, src, lang);
                 h.post(() -> {
                     busy = false;
+                    if (!stillFocused(t)) { tr.setState(BubbleButton.State.IDLE); copyToClipboard(out); error("Field changed — translation is on your clipboard"); return; }
                     rememberUndo(t);
                     if (t.replaceSelectedOrAll(this, out)) { flash(tr, BubbleButton.State.DONE, 700); showUndo(); }
                     else { tr.setState(BubbleButton.State.IDLE); error("This app didn't accept the translation"); }
@@ -687,7 +709,7 @@ public class FlowService extends AccessibilityService implements Mic.Listener {
         chip.setElevation(dp(8));
         chip.setOnClickListener(v -> {
             haptic(v);
-            if (undoTarget != null && undoText != null && undoTarget.alive()) undoTarget.setText(undoText, undoText.length());
+            if (undoText != null && stillFocused(undoTarget)) undoTarget.setText(undoText, undoText.length());
             hideUndo();
         });
         WindowManager.LayoutParams p = new WindowManager.LayoutParams(

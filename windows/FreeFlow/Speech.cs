@@ -147,13 +147,16 @@ sealed class LocalWhisper
     }
 
     public async Task<string> Transcribe(string wav, string language, string prompt, CancellationToken ct)
+        => (await TranscribeDetailed(wav, language, prompt, ct)).Text;
+
+    public async Task<SttResult> TranscribeDetailed(string wav, string language, string prompt, CancellationToken ct)
     {
         await EnsureServer();
         using var form = new MultipartFormDataContent();
         var file = new ByteArrayContent(await File.ReadAllBytesAsync(wav, ct));
         file.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
         form.Add(file, "file", "audio.wav");
-        form.Add(new StringContent("json"), "response_format");
+        form.Add(new StringContent("verbose_json"), "response_format");
         form.Add(new StringContent("0.0"), "temperature");
         if (language != "auto") form.Add(new StringContent(language), "language");
         if (!string.IsNullOrEmpty(prompt)) form.Add(new StringContent(prompt), "prompt");
@@ -161,7 +164,7 @@ sealed class LocalWhisper
         var body = await Http.Send(Local, req, ct);
         using var doc = JsonDocument.Parse(body);
         if (doc.RootElement.TryGetProperty("error", out var e)) throw new FFException(e.ToString());
-        return doc.RootElement.TryGetProperty("text", out var t) ? (t.GetString() ?? "").Trim() : "";
+        return SttResult.Parse(doc.RootElement);
     }
 }
 
@@ -233,25 +236,71 @@ sealed class ModelDownloader
     }
 }
 
+/// One transcription: the text, the language Whisper heard (ISO code, or null), and how sure it was (higher = better).
+sealed record SttResult(string Text, string Lang, double? Score)
+{
+    public static SttResult Parse(JsonElement r)
+    {
+        var text = r.TryGetProperty("text", out var t) ? (t.GetString() ?? "").Trim() : "";
+        string lang = null;
+        if (r.TryGetProperty("language", out var l) && l.ValueKind == JsonValueKind.String) lang = Languages.CodeOf(l.GetString());
+        else if (r.TryGetProperty("detected_language", out var dl) && dl.ValueKind == JsonValueKind.String) lang = Languages.CodeOf(dl.GetString());
+        // average log-probability of the words, weighted by segment length (how confident Whisper was)
+        double? score = null;
+        if (r.TryGetProperty("segments", out var segs) && segs.ValueKind == JsonValueKind.Array)
+        {
+            double sum = 0, weight = 0;
+            foreach (var sg in segs.EnumerateArray())
+            {
+                if (!sg.TryGetProperty("avg_logprob", out var lp) || lp.ValueKind != JsonValueKind.Number) continue;
+                double w = 1;
+                if (sg.TryGetProperty("start", out var st) && sg.TryGetProperty("end", out var en)
+                    && st.ValueKind == JsonValueKind.Number && en.ValueKind == JsonValueKind.Number)
+                    w = Math.Max(0.1, en.GetDouble() - st.GetDouble());
+                sum += lp.GetDouble() * w; weight += w;
+            }
+            if (weight > 0) score = sum / weight;
+        }
+        return new SttResult(text, lang, score);
+    }
+}
+
 static class Transcriber
 {
     public static async Task<string> Transcribe(string wav, CancellationToken ct)
     {
         var s = Settings.Current;
         var prompt = Vocabulary.WhisperPrompt();
-        switch (s.Stt)
+        if (s.Stt == SttProvider.Groq && string.IsNullOrWhiteSpace(s.GroqKey))
+            throw new FFException("Add your free Groq API key in Settings → Voice");
+        Func<string, Task<SttResult>> run;
+        if (s.Stt == SttProvider.LocalWhisper) run = lang => LocalWhisper.Shared.TranscribeDetailed(wav, lang, prompt, ct);
+        else if (s.Stt == SttProvider.Groq) run = lang => OpenAI("https://api.groq.com/openai/v1", s.GroqKey, s.GroqWhisperModel, wav, lang, prompt, ct);
+        else run = lang => OpenAI(s.CustomBase, s.CustomKey, s.CustomSttModel, wav, lang, prompt, ct);
+
+        var mine = s.MyLanguages?.Where(c => !string.IsNullOrWhiteSpace(c) && c != "auto").Distinct().ToArray() ?? Array.Empty<string>();
+        // a fixed language, "any language", or a single language of your own → one plain call
+        if (s.Language != "auto" || !s.LimitToMyLanguages || mine.Length == 0)
+            return (await run(s.Language == "auto" && s.LimitToMyLanguages && mine.Length == 1 ? mine[0] : s.Language)).Text;
+
+        // Auto-detect, but only among your languages: keep Whisper's guess if it's one of them…
+        var first = await run("auto");
+        if (first.Text.Length == 0) return "";
+        if (first.Lang != null && mine.Contains(first.Lang)) return first.Text;
+
+        // …otherwise (it "heard" Mandarin, Welsh…) re-run as each of your languages and keep the most confident.
+        ct.ThrowIfCancellationRequested();
+        var tries = await Task.WhenAll(mine.Select(async c =>
         {
-            case SttProvider.LocalWhisper:
-                return await LocalWhisper.Shared.Transcribe(wav, s.Language, prompt, ct);
-            case SttProvider.Groq:
-                if (string.IsNullOrWhiteSpace(s.GroqKey)) throw new FFException("Add your free Groq API key in Settings → Voice");
-                return await OpenAI("https://api.groq.com/openai/v1", s.GroqKey, s.GroqWhisperModel, wav, s.Language, prompt, ct);
-            default:
-                return await OpenAI(s.CustomBase, s.CustomKey, s.CustomSttModel, wav, s.Language, prompt, ct);
-        }
+            try { return await run(c); } catch (OperationCanceledException) { throw; } catch { return null; }
+        }));
+        var ok = tries.Where(t => t != null && t.Text.Length > 0).ToList();
+        if (ok.Count == 0) return first.Text;
+        var best = ok.Any(t => t.Score != null) ? ok.OrderByDescending(t => t.Score ?? double.MinValue).First() : ok[0];
+        return best.Text;
     }
 
-    static async Task<string> OpenAI(string baseUrl, string key, string model, string wav, string lang, string prompt, CancellationToken ct)
+    static async Task<SttResult> OpenAI(string baseUrl, string key, string model, string wav, string lang, string prompt, CancellationToken ct)
     {
         using var form = new MultipartFormDataContent();
         var file = new ByteArrayContent(await File.ReadAllBytesAsync(wav, ct));
@@ -260,12 +309,12 @@ static class Transcriber
         form.Add(new StringContent(model), "model");
         if (lang != "auto") form.Add(new StringContent(lang), "language");
         if (!string.IsNullOrEmpty(prompt)) form.Add(new StringContent(prompt), "prompt");
-        form.Add(new StringContent("json"), "response_format");
+        form.Add(new StringContent("verbose_json"), "response_format");
         form.Add(new StringContent("0"), "temperature");
         using var req = new HttpRequestMessage(HttpMethod.Post, Http.Url(baseUrl, "/audio/transcriptions")) { Content = form };
         if (!string.IsNullOrWhiteSpace(key)) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key.Trim());
         var body = await Http.Send(Http.Cloud, req, ct);
         using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.TryGetProperty("text", out var t) ? (t.GetString() ?? "").Trim() : "";
+        return SttResult.Parse(doc.RootElement);
     }
 }

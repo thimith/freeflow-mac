@@ -236,6 +236,20 @@ sealed class SettingsForm : Form
         var langs = Languages.All.ToList();
         lang.Controls.Add(Row("I speak", Pick(langs, langs.FirstOrDefault(l => l.Code == s.Language) ?? langs[0], l => l.Name, l => s.Language = l.Code)));
         lang.Controls.Add(Note("Auto-detect handles switching between languages. Pick one if short phrases come out in the wrong language."));
+        lang.Controls.Add(Check("With Auto-detect, only write in my languages:", s.LimitToMyLanguages, v => s.LimitToMyLanguages = v));
+        var grid = new FlowLayoutPanel { AutoSize = true, WrapContents = true, MaximumSize = new Size(620, 0), Margin = new Padding(18, 0, 0, 4) };
+        var mineSet = new HashSet<string>(s.MyLanguages ?? Array.Empty<string>());
+        foreach (var l in Languages.All.Skip(1))
+        {
+            var code = l.Code;
+            grid.Controls.Add(Check(l.Name, mineSet.Contains(code), v =>
+            {
+                if (v) mineSet.Add(code); else mineSet.Remove(code);
+                s.MyLanguages = Languages.All.Skip(1).Select(x => x.Code).Where(mineSet.Contains).ToArray();
+            }));
+        }
+        lang.Controls.Add(grid);
+        lang.Controls.Add(Note("If it thinks it heard another language (Mandarin in background noise…), it re-listens as each of yours and keeps the best match. Untick the box above if you sometimes dictate in other languages."));
         var targets = new List<Lang> { new("", "Don't translate", "") };
         targets.AddRange(Languages.All.Skip(1));
         lang.Controls.Add(Row("Always translate dictation to", Pick(targets, targets.FirstOrDefault(l => l.English == s.TranslateTo) ?? targets[0], l => l.Name, l => s.TranslateTo = l.English)));

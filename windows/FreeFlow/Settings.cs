@@ -105,6 +105,9 @@ public sealed class Settings
     public AiProvider Ai { get; set; } = AiProvider.Off;
     public string WhisperModel { get; set; } = "large-v3-turbo-q5_0";
     public string Language { get; set; } = "auto";
+    /// With Auto-detect: only ever write in these (stops Whisper "hearing" Mandarin in background noise).
+    public string[] MyLanguages { get; set; } = { "en", "fr", "es" };
+    public bool LimitToMyLanguages { get; set; } = true;
     public string TranslateTo { get; set; } = "";
     public string GroqKey { get; set; } = "";
     public string GroqWhisperModel { get; set; } = "whisper-large-v3-turbo";
@@ -270,4 +273,15 @@ public static class Languages
         new("hi", "हिन्दी", "Hindi"), new("ja", "日本語", "Japanese"), new("ko", "한국어", "Korean"),
         new("zh", "中文", "Chinese"),
     };
+
+    /// "english" / "English" / "en" → "en" (Whisper reports the language it heard by name).
+    public static string CodeOf(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        s = s.Trim();
+        var hit = All.Skip(1).FirstOrDefault(l => l.Code.Equals(s, StringComparison.OrdinalIgnoreCase)
+                                                 || l.English.Equals(s, StringComparison.OrdinalIgnoreCase));
+        if (hit != null) return hit.Code;
+        return s.ToLowerInvariant();   // a language we don't list: never one of yours
+    }
 }

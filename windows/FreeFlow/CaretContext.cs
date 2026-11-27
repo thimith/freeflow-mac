@@ -22,24 +22,41 @@ static class CaretContext
         {
             var el = AutomationElement.FocusedElement;
             if (el == null) return null;
+            string placeholder = "", help = "";
+            try { placeholder = (el.Current.Name ?? "").Trim(); help = (el.Current.HelpText ?? "").Trim(); } catch { }
+            bool IsPlaceholder(string s) { s = s.Trim(); return s.Length == 0 || s == placeholder || s == help; }
+
+            // The field's real value (inputs, text areas, most browser boxes) is the most reliable "is it empty?" signal.
+            string value = null;
+            try { if (el.TryGetCurrentPattern(ValuePattern.Pattern, out var vp) && vp is ValuePattern v) value = v.Current.Value; } catch { }
+            if (value != null && IsPlaceholder(value)) return new Around("", "");   // empty box → new sentence
+
             if (el.TryGetCurrentPattern(TextPattern.Pattern, out var tp) && tp is TextPattern text)
             {
+                var doc = text.DocumentRange;
+                var all = doc.GetText(4000) ?? "";
+                if (IsPlaceholder(all)) return new Around("", "");
+
                 var sel = text.GetSelection();
                 if (sel.Length == 0) return null;
                 var caret = sel[0];
-                string placeholder = "", help = "";
-                try { placeholder = el.Current.Name ?? ""; help = el.Current.HelpText ?? ""; } catch { }
                 var before = caret.Clone();
                 before.MoveEndpointByRange(TextPatternRangeEndpoint.End, caret, TextPatternRangeEndpoint.Start);
                 before.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -60);
+                // browsers/Electron apps sometimes walk out of the box into page text (labels, earlier messages):
+                // never look past the start/end of this field
+                if (before.CompareEndpoints(TextPatternRangeEndpoint.Start, doc, TextPatternRangeEndpoint.Start) < 0)
+                    before.MoveEndpointByRange(TextPatternRangeEndpoint.Start, doc, TextPatternRangeEndpoint.Start);
                 var after = caret.Clone();
                 after.MoveEndpointByRange(TextPatternRangeEndpoint.Start, caret, TextPatternRangeEndpoint.End);
                 after.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, 20);
+                if (after.CompareEndpoints(TextPatternRangeEndpoint.End, doc, TextPatternRangeEndpoint.End) > 0)
+                    after.MoveEndpointByRange(TextPatternRangeEndpoint.End, doc, TextPatternRangeEndpoint.End);
                 var b = before.GetText(60) ?? "";
                 var a = after.GetText(20) ?? "";
-                // an empty box that reports its grey placeholder ("Message #general") is not text you wrote
-                string whole = (b + a).Trim();
-                if (whole.Length > 0 && (whole == placeholder.Trim() || whole == help.Trim())) return new Around("", "");
+                if (IsPlaceholder(b + a)) return new Around("", "");
+                // if the app gave us text that isn't actually in this field, we can't trust it → treat as new sentence
+                if (all.Length < 4000 && b.Trim().Length > 0 && !all.Contains(b.Trim())) return null;
                 return new Around(b, a);
             }
             // apps that don't expose the cursor: we can't know → treat as a new sentence (capitalized)
@@ -66,8 +83,10 @@ static class CaretContext
     public static string Fit(string text, Around a)
     {
         if (string.IsNullOrEmpty(text)) return text;
-        if (a == null) return UpperFirst(text);
-        var t = text;
+        // the speech engine often hands back " hello" with a leading space: we decide the spacing ourselves
+        var t = text.TrimStart(' ', '\t', '\u00A0');
+        if (t.Length == 0) return t;
+        if (a == null) return UpperFirst(t);
         if (!MidSentence(a)) return UpperFirst(t);   // new sentence → always a capital
         {
             t = LowerFirst(t);
